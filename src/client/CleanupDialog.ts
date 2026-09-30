@@ -11,7 +11,7 @@
 import * as React from 'react'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SessionListLike, Translate } from './contract'
-import { usePendingRequest, settleRequest } from './pending'
+import { usePendingRequest, settleRequest, type CleanupRequest } from './pending'
 import { describeCleanupFailure, deleteSession, type SessionDeleteFailure } from './host'
 import { CLEANUP_LIST_LIMIT, describeAge, graceMinutes, planBlankCleanup, type CleanupPlan } from './cleanup-plan'
 
@@ -57,19 +57,28 @@ export function CleanupDialog(props: CleanupDialogProps): React.ReactElement | n
   if (request === null || request.kind !== 'cleanup') return null
   // One clock per opening: the grace window and every age read the same instant,
   // so the list cannot drift while the operator reads it.
-  return React.createElement(CleanupForm, { key: 'cleanup', t: props.t, useSessions: props.useSessions, refreshSessions: props.refreshSessions })
+  return React.createElement(CleanupForm, {
+    key: 'cleanup',
+    t: props.t,
+    useSessions: props.useSessions,
+    refreshSessions: props.refreshSessions,
+    request
+  })
 }
 
 /**
  * Render one cleanup confirmation and its run.
- * @param props - the locale seat, the list hook, and the refresh hop.
+ * @param props - the locale seat, the list hook, the refresh hop, and the request.
  * @returns the cleanup modal.
  */
-function CleanupForm(props: CleanupDialogProps): React.ReactElement {
+function CleanupForm(props: CleanupDialogProps & { readonly request: CleanupRequest }): React.ReactElement {
   const snapshot = props.useSessions((list) => list)
   const [openedAt] = React.useState(() => Date.now())
   const [run, setRun] = React.useState<RunState>(INITIAL_RUN)
-  const plan = React.useMemo(() => planBlankCleanup(snapshot, openedAt), [snapshot, openedAt])
+  const plan = React.useMemo(
+    () => planBlankCleanup({ facts: props.request.rows ?? [], live: snapshot }, openedAt),
+    [props.request.rows, snapshot, openedAt]
+  )
 
   const running = run.phase === 'running'
   const close = (): void => {
@@ -87,26 +96,39 @@ function CleanupForm(props: CleanupDialogProps): React.ReactElement {
     })
   }
 
+  // The durable facts are a Host round-trip, so the dialog has three states before
+  // its run: loading, a load failure, and the plan itself.
+  const loading = props.request.loading
+  const loadError = props.request.loadError
+
   return React.createElement(primitives.Modal, {
     open: true,
     onClose: close,
     closeLabel: props.t('close'),
     title: props.t('cleanup.title'),
-    description: describeRun(plan, run, props.t),
+    description: loadError !== undefined
+      ? describeCleanupFailure(loadError, props.t)
+      : loading
+        ? props.t('cleanup.loading')
+        : describeRun(plan, run, props.t),
     footer: React.createElement(React.Fragment, null, React.createElement(primitives.Button, {
       variant: 'outline',
       disabled: running,
       onClick: close,
       children: run.phase === 'done' ? props.t('close') : props.t('cancel')
-    }), run.phase === 'confirm' && plan.targets.length > 0 && React.createElement(primitives.Button, {
+    }), run.phase === 'confirm' && !loading && loadError === undefined && plan.targets.length > 0 && React.createElement(primitives.Button, {
       variant: 'primary',
       disabled: running,
       onClick: confirm,
       children: props.t('cleanup.confirm', { n: plan.targets.length })
     })),
-    children: run.phase === 'confirm'
-      ? renderPlan(plan, openedAt, props.t)
-      : renderRun(run, plan.targets.length, props.t)
+    children: loadError !== undefined
+      ? null
+      : loading
+        ? null
+        : run.phase === 'confirm'
+          ? renderPlan(plan, openedAt, props.t)
+          : renderRun(run, plan.targets.length, props.t)
   })
 }
 

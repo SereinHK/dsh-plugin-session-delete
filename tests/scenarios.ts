@@ -11,7 +11,7 @@
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { encodeSegment, projectKey, SESSION_DELETE_PATH } from '../src/index.ts'
+import { encodeSegment, projectKey, SESSION_DELETE_PATH, SESSION_UNUSED_PATH } from '../src/index.ts'
 
 /** One section of the run: a label, how many checks it made, and what failed. */
 export interface SectionResult {
@@ -28,9 +28,26 @@ export interface HostStub {
     readonly requestBody: string
     readonly fetch: (request: Request) => Promise<Response>
   }
+  /** The second route: durable per-Session facts. */
+  readonly unused: {
+    readonly path: string
+    readonly methods: readonly string[]
+    readonly requestBody: string
+    readonly fetch: (request: Request) => Promise<Response>
+  }
   readonly events: readonly (readonly [string, unknown])[]
   readonly root: string
   readonly cacheDir: string
+}
+
+/** Knobs for the durable-facts route, defaulted so existing sections stay short. */
+export interface MountOptions {
+  /** Ids the projection cache holds a record for; `'none'` models a cold cache. */
+  readonly projected?: readonly string[] | 'none'
+  /** Durable blankness per id; anything unlisted is blank. */
+  readonly blank?: Readonly<Record<string, boolean>>
+  /** A cache whose reads throw, to prove a failure can never become a deletion. */
+  readonly cacheThrows?: boolean
 }
 
 /** Collects checks for one section without aborting on the first failure. */
@@ -91,10 +108,11 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
   }
 
   /** Mount the plugin against a stub context. */
-  const mount = (headers: Record<string, { cwd: string } | 'live'>): HostStub => {
+  const mount = (headers: Record<string, { cwd: string } | 'live'>, options: MountOptions = {}): HostStub => {
     const routes: HostStub['route'][] = []
     const events: [string, unknown][] = []
     const live = new Set(Object.keys(headers).filter((id) => headers[id] === 'live'))
+    const createdAt = 1_700_000_000_000
     apply({
       effect: (callback: () => unknown) => {
         const disposer = callback()
@@ -112,21 +130,42 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
           return header === undefined || header === 'live' ? undefined : { header: { id, cwd: header.cwd } }
         }
       },
+      // The Host's own enumeration of stored Sessions, and the projection cache it
+      // reads them through. Both are stubs here; the real shapes are what the
+      // running app was verified against.
+      sessionQuery: {
+        listSessions: async () => Object.entries(headers)
+          .filter(([, value]) => value !== 'live')
+          .map(([id, value]) => ({ header: { id, cwd: (value as { cwd: string }).cwd, createdAt } }))
+      },
+      get: (name: string) => {
+        if (name !== 'sessionProjectionCache') return undefined
+        if (options.cacheThrows === true) {
+          return { cachedSnapshot: () => { throw new Error('projection cache offline') } }
+        }
+        return {
+          cachedSnapshot: (header: { id: string }) => {
+            const projected = options.projected ?? 'all'
+            if (projected === 'none' || (projected !== 'all' && !projected.includes(header.id))) return undefined
+            return { values: { sessionListMetadata: { blank: options.blank?.[header.id] ?? true, lastPromptAt: null } } }
+          }
+        }
+      },
       emit: (event: string, ...args: unknown[]) => {
         events.push([event, args[0]])
       }
     })
-    return { route: routes[0]!, events, root, cacheDir }
+    return { route: routes[0]!, unused: routes[1]!, events, root, cacheDir }
   }
 
-  /** Issue one request against the registered route. */
-  const call = async (stub: HostStub, body: unknown): Promise<{ status: number; payload: any }> => {
-    const request = new Request(`http://127.0.0.1:19387${SESSION_DELETE_PATH}`, {
+  /** Issue one request against a registered route. */
+  const call = async (stub: HostStub, body: unknown, path: string = SESSION_DELETE_PATH): Promise<{ status: number; payload: any }> => {
+    const request = new Request(`http://127.0.0.1:19387${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: typeof body === 'string' ? body : JSON.stringify(body)
     })
-    const response = await stub.route.fetch(request)
+    const response = await (path === SESSION_DELETE_PATH ? stub.route.fetch(request) : stub.unused.fetch(request))
     let payload: unknown = null
     try {
       payload = await response.json()
@@ -140,10 +179,66 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
   {
     const section = new Section('route registration')
     const stub = mount({})
-    section.check('registers exactly one route', stub.route !== undefined)
+    section.check('registers the delete route', stub.route !== undefined)
     section.check('owns the documented path', stub.route?.path === SESSION_DELETE_PATH, stub.route?.path)
     section.check('accepts POST only', stub.route?.methods.length === 1 && stub.route.methods[0] === 'POST', JSON.stringify(stub.route?.methods))
     section.check('buffers the request body', stub.route?.requestBody === 'buffered', stub.route?.requestBody)
+    section.check('registers the durable-facts route', stub.unused !== undefined)
+    section.check('under its own path', stub.unused?.path === SESSION_UNUSED_PATH, stub.unused?.path)
+    section.check('also POST-only and buffered', stub.unused?.methods[0] === 'POST' && stub.unused?.requestBody === 'buffered')
+    results.push(section.result())
+  }
+
+  // ── durable facts ────────────────────────────────────────────────────────────
+  {
+    const section = new Section('durable per-Session facts')
+    const stored = 'session-aaaaaaaa-1111-2222-3333-444444444444'
+    const second = 'session-bbbbbbbb-1111-2222-3333-444444444444'
+    const stub = mount({ [stored]: { cwd }, [second]: { cwd } })
+    const { status, payload } = await call(stub, {}, SESSION_UNUSED_PATH)
+    section.check('answers 200', status === 200, String(status))
+    const rows = payload?.value?.sessions
+    section.check('reports every stored Session', Array.isArray(rows) && rows.length === 2, JSON.stringify(rows))
+    const row = rows?.find((entry: { sessionId: string }) => entry.sessionId === stored)
+    section.check('carries the workspace path', row?.cwd === cwd, JSON.stringify(row))
+    section.check('carries a durable blank flag', row?.blank === true, JSON.stringify(row))
+    section.check('marks it proven when the cache answered', row?.proven === true, JSON.stringify(row))
+    section.check('reports no last prompt for an unused Session', row?.lastPromptAt === null, JSON.stringify(row))
+    section.check('keeps updatedAt at the creation time', row?.updatedAt === row?.createdAt, JSON.stringify(row))
+    // An empty body is legal; anything else must be refused rather than ignored.
+    section.check('accepts an empty body', (await call(stub, '', SESSION_UNUSED_PATH)).status === 200)
+    const invalid = await call(stub, 'not json', SESSION_UNUSED_PATH)
+    section.check('refuses an unparsable body', invalid.status === 400 && invalid.payload?.error?.code === 'invalid-request', JSON.stringify(invalid.payload))
+    const array = await call(stub, '[]', SESSION_UNUSED_PATH)
+    section.check('refuses a non-object body', array.status === 400, JSON.stringify(array.payload))
+    results.push(section.result())
+  }
+
+  // ── durable facts: what cannot be proven stays unproven ──────────────────────
+  {
+    const section = new Section('unprovable facts')
+    const known = 'session-cccccccc-1111-2222-3333-444444444444'
+    const unknown = 'session-dddddddd-1111-2222-3333-444444444444'
+    const used = 'session-eeeeeeee-1111-2222-3333-444444444444'
+    const cold = mount({ [known]: { cwd }, [unknown]: { cwd } }, { projected: [known] })
+    const coldRows = (await call(cold, {}, SESSION_UNUSED_PATH)).payload?.value?.sessions
+    section.check('a cached Session is proven', coldRows?.find((r: { sessionId: string }) => r.sessionId === known)?.proven === true)
+    const unprovenRow = coldRows?.find((r: { sessionId: string }) => r.sessionId === unknown)
+    section.check('a Session with no cache record is not proven', unprovenRow?.proven === false, JSON.stringify(unprovenRow))
+    section.check('and claims no blankness', unprovenRow?.blank === false, JSON.stringify(unprovenRow))
+
+    const blank = mount({ [used]: { cwd } }, { blank: { [used]: false } })
+    const usedRow = (await call(blank, {}, SESSION_UNUSED_PATH)).payload?.value?.sessions?.[0]
+    section.check('a Session with a turn is proven and not blank', usedRow?.proven === true && usedRow?.blank === false, JSON.stringify(usedRow))
+
+    // A cache that throws must degrade to "unproven", never to an error or a guess.
+    const broken = mount({ [known]: { cwd } }, { cacheThrows: true })
+    const brokenAnswer = await call(broken, {}, SESSION_UNUSED_PATH)
+    section.check('an unreadable cache still answers 200', brokenAnswer.status === 200, String(brokenAnswer.status))
+    section.check('and reports the row as unproven', brokenAnswer.payload?.value?.sessions?.[0]?.proven === false, JSON.stringify(brokenAnswer.payload))
+
+    const empty = mount({})
+    section.check('a Host with no stored Sessions answers an empty list', (await call(empty, {}, SESSION_UNUSED_PATH)).payload?.value?.sessions?.length === 0)
     results.push(section.result())
   }
 

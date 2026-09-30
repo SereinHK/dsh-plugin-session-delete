@@ -164,9 +164,39 @@ let respond = (body) => ({
   body: { ok: true, value: { sessionId: body?.sessionId, directory: 'x', files: [], cacheRemoved: true } }
 })
 
+/**
+ * What the Host's durable-facts route answers. The cleanup reads these instead of
+ * guessing from the list, so they are the interesting fixture in the cleanup
+ * scenarios; `list` now only supplies the live facts (running, open).
+ */
+let unusedFacts = []
+/** A forced failure of the durable-facts route, to prove it is worded not swallowed. */
+let unusedFailure = null
+
+/** One durable row as the Host reports it. */
+function fact(sessionId, overrides = {}) {
+  const at = Date.now() - 3 * 60 * 60 * 1000
+  return {
+    sessionId,
+    cwd: `C:\\work\\${sessionId}`,
+    createdAt: at,
+    updatedAt: at,
+    blank: true,
+    proven: true,
+    lastPromptAt: null,
+    ...overrides
+  }
+}
+
 globalThis.fetch = async (url, init) => {
-  const body = init?.body === undefined ? undefined : JSON.parse(String(init.body))
-  requests.push({ url: String(url), method: init?.method, body: init?.body })
+  const target = String(url)
+  const body = init?.body === undefined || String(init.body) === '' ? undefined : JSON.parse(String(init.body))
+  requests.push({ url: target, method: init?.method, body: init?.body })
+  if (target === '/api/session.unused') {
+    return unusedFailure === null
+      ? { ok: true, status: 200, json: async () => ({ ok: true, value: { sessions: unusedFacts } }) }
+      : { ok: false, status: 500, json: async () => ({ ok: false, error: unusedFailure }) }
+  }
   const answer = respond(body)
   return { ok: answer.ok, status: answer.status, json: async () => answer.body }
 }
@@ -321,20 +351,27 @@ check('the dialog closes after it settles', renderRoot(deleteDialog.Component, {
 
 console.log('')
 console.log('blank-Session cleanup')
+// The live list now only supplies the live facts; blankness comes from the Host.
 list = {
-  ids: ['session-open', 'session-blank-old', 'session-blank-fresh', 'session-used', 'session-running', 'session-unproven'],
+  ids: ['session-open', 'session-blank-old', 'session-blank-fresh', 'session-used', 'session-running'],
   byId: {
     'session-open': summary('session-open'),
-    'session-blank-old': summary('session-blank-old', { cwd: 'C:\\work\\alpha' }),
-    'session-blank-fresh': summary('session-blank-fresh', { updatedAt: Date.now() - 60_000 }),
-    // "Used" has to be expressed durably: the live flag on its own is not proof.
-    'session-used': summary('session-used', { projectionValues: { sessionListMetadata: { blank: false, lastPromptAt: Date.now() - 5 * 60 * 60 * 1000 } } }),
-    'session-running': summary('session-running', { running: true }),
-    // No projection yet: the cleanup must skip it rather than guess.
-    'session-unproven': { id: 'session-unproven', running: false, updatedAt: Date.now() - 9 * 60 * 60 * 1000 }
+    'session-blank-old': summary('session-blank-old'),
+    'session-blank-fresh': summary('session-blank-fresh'),
+    'session-used': summary('session-used'),
+    'session-running': summary('session-running', { running: true })
   },
   current: 'session-open'
 }
+unusedFacts = [
+  fact('session-open'),
+  fact('session-blank-old', { cwd: 'C:\\work\\alpha' }),
+  fact('session-blank-fresh', { updatedAt: Date.now() - 60_000 }),
+  fact('session-used', { blank: false, lastPromptAt: Date.now() - 5 * 60 * 60 * 1000 }),
+  fact('session-running'),
+  // No projection on the Host: the cleanup must skip it rather than guess.
+  fact('session-unproven', { proven: false, blank: false })
+]
 requests.length = 0
 const buttonTree = renderRoot(cleanup.Component, { wide: true, t })
 check('the cleanup trigger renders its label', inspect(buttonTree).text.join(' ').includes('清理空会话'), inspect(buttonTree).text.join(' '))
@@ -342,37 +379,53 @@ const railTree = renderRoot(cleanup.Component, { wide: false, t })
 check('the rail form still renders', railTree !== null)
 const openCleanup = handlerFor(buttonTree, /清理空会话/)
 openCleanup.handler()
-const cleanupDialog = dialogs.find((entry) => entry.options.id === 'session-cleanup-dialog')
+const pendingDialog = dialogs.find((entry) => entry.options.id === 'session-cleanup-dialog')
 let refreshCalls = 0
-const cleanupTree = renderRoot(cleanupDialog.Component, {
+const renderCleanupDialog = () => renderRoot(pendingDialog.Component, {
   t,
   useSessions: (selector) => selector(list),
   refreshSessions: async () => {
     refreshCalls++
   }
 })
+const loadingText = inspect(renderCleanupDialog()).text.join(' ')
+check('it says what it is waiting for', loadingText.includes('正在向宿主确认'), loadingText)
+await flush()
+const cleanupDialog = pendingDialog
+const cleanupTree = renderCleanupDialog()
 const cleanupText = inspect(cleanupTree).text.join(' ')
 check('the dialog promises exactly the one eligible Session', cleanupText.includes('有 1 个从未使用过的空会话'), cleanupText)
 check('it lists the workspace path of what will go', cleanupText.includes('C:\\work\\alpha'), cleanupText)
 check('it explains the grace period', cleanupText.includes('60 分钟'), cleanupText)
 check('the open Session is not listed', !cleanupText.includes('session-open'), cleanupText)
 check('the fresh Session is not listed', !cleanupText.includes('session-blank-fresh'), cleanupText)
-check('a Session with no durable metadata is not listed', !cleanupText.includes('session-unproven'), cleanupText)
+check('a Session the Host could not prove is not listed', !cleanupText.includes('session-unproven'), cleanupText)
 check('no copy key is missing', !cleanupText.includes('!'), cleanupText)
 const cleanupConfirm = handlerFor(cleanupTree, /删除 1 个/)
 check('the confirm button carries the count', cleanupConfirm !== undefined, JSON.stringify(inspect(cleanupTree).handlers.map((entry) => entry.label)))
+requests.length = 0
 await cleanupConfirm.handler()
 await flush()
 check('cleanup removes exactly the eligible Session', requests.length === 1 && requests[0].body.includes('session-blank-old'), JSON.stringify(requests.map((entry) => entry.body)))
 check('cleanup refreshes the list once when it settles', refreshCalls === 1, String(refreshCalls))
-const settled = renderRoot(cleanupDialog.Component, {
-  t,
-  useSessions: (selector) => selector(list),
-  refreshSessions: async () => {
-    refreshCalls++
-  }
-})
+const settled = renderCleanupDialog()
 check('the settled dialog reports the outcome', inspect(settled).text.join(' ').includes('已删除 1 个空会话'), inspect(settled).text.join(' '))
+
+console.log('')
+console.log('a cleanup whose facts cannot be read')
+{
+  resetRoot(pendingDialog.Component)
+  respond = (body) => ({ ok: true, status: 200, body: { ok: true, value: { sessionId: body?.sessionId } } })
+  unusedFacts = []
+  unusedFailure = { code: 'storage-unreadable', message: 'cannot list stored sessions: disk offline' }
+  openCleanup.handler()
+  await flush()
+  const text = inspect(renderCleanupDialog()).text.join(' ')
+  check('the dialog reports the Host failure', text.includes('清理失败') && text.includes('disk offline'), text)
+  check('it does not pass a failure off as "nothing to clean"', !text.includes('没有可清理的空会话'), text)
+  check('no confirmation is offered', handlerFor(renderCleanupDialog(), /删除 \d+ 个/) === undefined, text)
+  unusedFailure = null
+}
 
 // ── refusal paths ──────────────────────────────────────────────────────────────
 // The happy paths above prove the wiring; these prove the branches an operator
@@ -406,15 +459,8 @@ console.log('a refused removal')
 console.log('')
 console.log('a partly failing cleanup')
 {
-  resetRoot(cleanupDialog.Component)
-  const two = {
-    ids: ['blank-one', 'blank-two'],
-    byId: {
-      'blank-one': summary('blank-one', { cwd: 'C:\\work\\one' }),
-      'blank-two': summary('blank-two', { cwd: 'C:\\work\\two' })
-    },
-    current: undefined
-  }
+  resetRoot(pendingDialog.Component)
+  unusedFacts = [fact('blank-one', { cwd: 'C:\\work\\one' }), fact('blank-two', { cwd: 'C:\\work\\two' })]
   const seen = []
   respond = (body) => {
     seen.push(body.sessionId)
@@ -424,30 +470,25 @@ console.log('a partly failing cleanup')
     return { ok: true, status: 200, body: { ok: true, value: { sessionId: body.sessionId, directory: 'x', files: [], cacheRemoved: true } } }
   }
   requests.length = 0
-  let refreshesAfterCleanup = 0
   openCleanup.handler()
-  const props = {
-    t,
-    useSessions: (selector) => selector(two),
-    refreshSessions: async () => {
-      refreshesAfterCleanup++
-    }
-  }
-  const tree = renderRoot(cleanupDialog.Component, props)
+  await flush()
+  const tree = renderCleanupDialog()
   check('both blank Sessions are planned', inspect(tree).text.join(' ').includes('有 2 个从未使用过的空会话'), inspect(tree).text.join(' '))
+  refreshCalls = 0
   await handlerFor(tree, /删除 2 个/).handler()
   await flush()
   check('every planned Session is attempted, one at a time', seen.join(',') === 'blank-one,blank-two', seen.join(','))
-  const settledText = inspect(renderRoot(cleanupDialog.Component, props)).text.join(' ')
+  const settledText = inspect(renderCleanupDialog()).text.join(' ')
   check('the summary separates deleted from failed', settledText.includes('已删除 1') && settledText.includes('1 个失败'), settledText)
   check('the summary carries the failure reason', settledText.includes('no stored session log'), settledText)
-  check('the list is refreshed once even on partial failure', refreshesAfterCleanup === 1, String(refreshesAfterCleanup))
+  check('the list is refreshed once even on partial failure', refreshCalls === 1, String(refreshCalls))
 }
 
 console.log('')
 console.log('a cleanup target that became live')
 {
-  resetRoot(cleanupDialog.Component)
+  resetRoot(pendingDialog.Component)
+  unusedFacts = [fact('session-blank-old')]
   respond = () => ({
     ok: false,
     status: 409,
@@ -455,11 +496,11 @@ console.log('a cleanup target that became live')
   })
   requests.length = 0
   openCleanup.handler()
-  const props = { t, useSessions: (selector) => selector(list), refreshSessions: async () => {} }
-  const tree = renderRoot(cleanupDialog.Component, props)
+  await flush()
+  const tree = renderCleanupDialog()
   await handlerFor(tree, /删除 1 个/).handler()
   await flush()
-  const settledText = inspect(renderRoot(cleanupDialog.Component, props)).text.join(' ')
+  const settledText = inspect(renderCleanupDialog()).text.join(' ')
   check('an in-use Session is reported as skipped, not failed', settledText.includes('正在使用，已跳过'), settledText)
   check('it is not reported as an error', !settledText.includes('1 个失败'), settledText)
 }

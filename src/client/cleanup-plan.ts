@@ -8,7 +8,8 @@
  *
  * @module @deepseek-ai/dsh-client-ui-session-delete/client/cleanup-plan
  */
-import type { SessionListLike, SessionSummaryLike, Translate } from './contract'
+import type { SessionListLike, Translate } from './contract'
+import type { UnusedSessionRow } from './host'
 
 /**
  * How long a blank Session must have been idle before cleanup may remove it.
@@ -46,23 +47,31 @@ export interface CleanupPlan {
   readonly unprovenSkipped: number
 }
 
+/** What the plan is decided from. */
+export interface CleanupInput {
+  /** Durable per-Session facts, as the Host reports them. */
+  readonly facts: readonly UnusedSessionRow[]
+  /** The client's Session list, consulted only for the live facts (open, running). */
+  readonly live?: SessionListLike | undefined
+}
+
 /**
  * Decide which blank Sessions a cleanup run may remove.
  *
- * Blankness is read from the **durable** projection (`sessionListMetadata`, derived
- * from the stored events), never from the live `blank` flag on the row. That flag
- * describes a Session resident in this process — for one loaded from disk it says
- * nothing, and a first attempt at this feature deleted nothing at all because of
- * exactly that: every stored Session looked non-blank. A Session whose durable
- * metadata has not arrived yet is skipped rather than guessed at.
+ * Blankness is taken from the **Host's durable projection** and from nothing else.
+ * Two earlier attempts to derive it in the page failed for the same underlying
+ * reason: a stored Session's list row carries a live first-turn flag that says
+ * nothing about its log, and its projection block is loaded only for the Session
+ * being viewed. A row the Host could not prove is skipped rather than guessed at —
+ * this runs before an irreversible removal, so "unknown" must never mean "yes".
  *
- * @param list - the client Session-list snapshot.
+ * @param input - the Host's facts plus the client's live list.
  * @param now - the clock to measure the grace period against.
  * @param graceMs - the idle grace period.
  * @returns the plan, with each skip rule counted for the dialog's copy.
  */
 export function planBlankCleanup(
-  list: SessionListLike,
+  input: CleanupInput,
   now: number = Date.now(),
   graceMs: number = BLANK_IDLE_GRACE_MS
 ): CleanupPlan {
@@ -73,35 +82,28 @@ export function planBlankCleanup(
   let freshSkipped = 0
   let unprovenSkipped = 0
 
-  for (const sessionId of list.ids) {
-    const summary: SessionSummaryLike | undefined = list.byId[sessionId]
-    if (summary === undefined) continue
-    const metadata = summary.projectionValues?.sessionListMetadata
-    if (metadata?.blank !== true) {
+  for (const fact of input.facts) {
+    if (!fact.proven) {
       unprovenSkipped++
       continue
     }
+    // Proven to have started a turn: not a candidate, and nothing to explain.
+    if (!fact.blank) continue
     considered++
-    if (sessionId === list.current) {
+    if (fact.sessionId === input.live?.current) {
       currentSkipped++
       continue
     }
-    if (summary.running === true) {
+    if (input.live?.byId[fact.sessionId]?.running === true) {
       runningSkipped++
       continue
     }
-    // The store already folds `lastPromptAt` into `updatedAt`; keep the durable
-    // timestamp as a floor so a stale row cannot look older than it is.
-    const updatedAt = Math.max(summary.updatedAt ?? 0, metadata.lastPromptAt ?? 0)
+    const updatedAt = Math.max(fact.updatedAt, fact.lastPromptAt ?? 0)
     if (now - updatedAt < graceMs) {
       freshSkipped++
       continue
     }
-    targets.push({
-      sessionId,
-      updatedAt,
-      ...summary.cwd === undefined ? {} : { cwd: summary.cwd }
-    })
+    targets.push({ sessionId: fact.sessionId, updatedAt, cwd: fact.cwd })
   }
 
   targets.sort((left, right) => left.updatedAt - right.updatedAt)

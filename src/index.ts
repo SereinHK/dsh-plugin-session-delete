@@ -28,8 +28,23 @@ import { basename, join, resolve, sep } from 'node:path'
 /** The exact Fetch route this plugin owns; inside Connection's authenticated `/api` prefix. */
 export const SESSION_DELETE_PATH = '/api/session.delete'
 
+/**
+ * The second route: durable per-Session facts the browser cannot see for itself.
+ *
+ * A stored Session's blankness lives in the Host's projection of its log. The
+ * browser's Session-list row does NOT carry it for a Session that is not resident
+ * (its `blank` flag describes a live Session's first turn), and its projection
+ * block is loaded only for the Session being viewed — so a cleanup decided in the
+ * page would see nothing to clean. This route answers from the same projection
+ * cache the Session list itself uses.
+ */
+export const SESSION_UNUSED_PATH = '/api/session.unused'
+
 /** Longest accepted session id, bounded before any filesystem or lookup work. */
 const MAX_SESSION_ID_LENGTH = 200
+
+/** Rows this route will report; a profile with more stored Sessions than this is out of scope. */
+const MAX_UNUSED_ROWS = 5000
 
 /** Session ids are filesystem segments: letters, digits, `.`, `_`, `-` only. */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]+$/
@@ -40,9 +55,11 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]+$/
  * `connection` owns the route registry and its Host/Origin + browser-token
  * fence; `sessionPersistence` resolves a stored Session's header (its `cwd`
  * picks the project directory) and the session root; `sessions` is the live
- * in-memory registry this plugin refuses to delete from under.
+ * in-memory registry this plugin refuses to delete from under; `sessionQuery`
+ * is the Host's own enumeration of stored Sessions, which is where the durable
+ * per-Session facts come from.
  */
-export const inject = ['connection', 'sessionPersistence', 'sessions']
+export const inject = ['connection', 'sessionPersistence', 'sessions', 'sessionQuery']
 
 /** The slice of Connection this plugin uses. */
 interface FetchRouteRegistry {
@@ -66,11 +83,53 @@ interface SessionStoreLike {
   get(sessionId: string): unknown
 }
 
+/** One stored Session as the Host's query service reports it. */
+interface SessionRecordLike {
+  readonly header: {
+    readonly id: string
+    readonly cwd?: string | undefined
+    readonly createdAt?: number | undefined
+  }
+}
+
+/** The slice of Session query this plugin uses. */
+interface SessionQueryLike {
+  listSessions(signal?: AbortSignal): Promise<readonly SessionRecordLike[]>
+}
+
+/**
+ * The slice of the projection cache this plugin uses.
+ *
+ * Read through `ctx.get` rather than `inject`: the cache is an optional service,
+ * exactly as the Session controller itself treats it, and a profile without one
+ * should serve "unproven" rows rather than refuse to compose.
+ */
+interface SessionProjectionCacheLike {
+  cachedSnapshot(meta: unknown, keys?: readonly string[]): { readonly values: Readonly<Record<string, unknown>> } | undefined
+}
+
+/** Durable facts about one stored Session, as this plugin reports them. */
+export interface UnusedSessionRow {
+  readonly sessionId: string
+  readonly cwd: string
+  /** Header creation time, or null when the log does not carry one. */
+  readonly createdAt: number | null
+  /** Last activity: the header's creation time, floored by the last accepted prompt. */
+  readonly updatedAt: number
+  /** True only when the durable projection says the log holds no accepted prompt. */
+  readonly blank: boolean
+  /** False when the projection cache had no record, so `blank` proves nothing. */
+  readonly proven: boolean
+  readonly lastPromptAt: number | null
+}
+
 /** Host context this plugin applies to. */
 interface HostContext {
   readonly connection: { readonly fetch: FetchRouteRegistry }
   readonly sessionPersistence: SessionPersistenceLike
   readonly sessions: SessionStoreLike
+  readonly sessionQuery: SessionQueryLike
+  get(name: string): unknown
   effect(callback: () => unknown, label?: string): unknown
   emit(event: string, ...args: unknown[]): unknown
 }
@@ -90,8 +149,8 @@ interface DeleteReport {
 }
 
 /**
- * Register the authenticated delete route for this plugin's lifetime.
- * @param ctx - Host context carrying Connection, persistence, and live Sessions.
+ * Register this plugin's authenticated routes for its lifetime.
+ * @param ctx - Host context carrying Connection, persistence, query, and live Sessions.
  */
 export function apply(ctx: HostContext): void {
   ctx.effect(() => ctx.connection.fetch.register({
@@ -100,6 +159,75 @@ export function apply(ctx: HostContext): void {
     requestBody: 'buffered',
     fetch: (request) => handleSessionDelete(ctx, request)
   }), `session-delete: POST ${SESSION_DELETE_PATH}`)
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: SESSION_UNUSED_PATH,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: (request) => handleSessionUnused(ctx, request)
+  }), `session-delete: POST ${SESSION_UNUSED_PATH}`)
+}
+
+/**
+ * Serve one request for the durable per-Session facts.
+ *
+ * The body is ignored: this route reports every stored Session and lets the caller
+ * apply its own policy, so it stays useful to more than the cleanup dialog.
+ *
+ * @param ctx - Host context.
+ * @param request - the authenticated Fetch request.
+ * @returns a JSON envelope whose value is `{ sessions: UnusedSessionRow[] }`.
+ */
+async function handleSessionUnused(ctx: HostContext, request: Request): Promise<Response> {
+  // A body is optional here; an unparsable one is still refused so a caller
+  // cannot believe arguments were honoured when they were not.
+  const text = await request.text()
+  if (text.trim() !== '') {
+    try {
+      const parsed: unknown = JSON.parse(text)
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        return failure('invalid-request', 'the request body must be a JSON object or empty', 400)
+      }
+    } catch {
+      return failure('invalid-request', 'the request body must be a JSON object or empty', 400)
+    }
+  }
+
+  let records: readonly SessionRecordLike[]
+  try {
+    records = await ctx.sessionQuery.listSessions()
+  } catch (error) {
+    return failure('storage-unreadable', `cannot list stored sessions: ${messageOf(error)}`, 500)
+  }
+
+  const cache = ctx.get('sessionProjectionCache') as SessionProjectionCacheLike | undefined
+  const sessions: UnusedSessionRow[] = []
+  for (const record of records.slice(0, MAX_UNUSED_ROWS)) {
+    const header = record.header
+    if (header.cwd === undefined || header.cwd.length === 0) continue
+    let metadata: { readonly blank?: unknown; readonly lastPromptAt?: unknown } | undefined
+    try {
+      metadata = cache?.cachedSnapshot(header, ['sessionListMetadata'])?.values.sessionListMetadata as
+        | { readonly blank?: unknown; readonly lastPromptAt?: unknown }
+        | undefined
+    } catch {
+      // A cache that cannot answer is "unproven", never an error: the caller's
+      // policy must not be talked into a deletion by a failure.
+      metadata = undefined
+    }
+    const lastPromptAt = typeof metadata?.lastPromptAt === 'number' ? metadata.lastPromptAt : null
+    const createdAt = typeof header.createdAt === 'number' ? header.createdAt : null
+    sessions.push({
+      sessionId: header.id,
+      cwd: header.cwd,
+      createdAt,
+      updatedAt: Math.max(createdAt ?? 0, lastPromptAt ?? 0),
+      blank: metadata?.blank === true,
+      proven: metadata !== undefined,
+      lastPromptAt
+    })
+  }
+
+  return Response.json({ ok: true, value: { sessions } }, { headers: { 'cache-control': 'no-store' } })
 }
 
 /**

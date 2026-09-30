@@ -76,7 +76,10 @@ dsh-plugin-session-delete`. From a source checkout, `node install.mjs --uninstal
 - `sidebar.footer.action` — **“Clean up empty conversations”** beside Settings:
   removes blank Sessions (`blank: true`, i.e. never started a turn) in one run.
 - `shell.overlay` — the two confirmations, each listing exactly what will go.
-- The node half registers `POST /api/session.delete` inside Connection's
+- The node half registers two routes inside Connection's
+  authenticated `/api` fence: `POST /api/session.delete` for one removal, and
+  `POST /api/session.unused`, which reports the durable per-Session facts (is the
+  log empty, and when was it last prompted) that the page cannot derive for itself.
   authenticated `/api` fence; both surfaces call it.
 
 Deletion is irreversible: the whole Session directory under the sessions root
@@ -178,9 +181,9 @@ The repository root **is** the package, so that a git install resolves its manif
 
 ```sh
 node tools/build.mjs            # src/ -> lib/  (also: node tools/build.mjs --check)
-node --test "tests/*.test.ts"   # 24 tests: host route, cleanup plan, dictionaries
-node tools/verify-artifact.mjs  # 39 host-route checks against the built bytes
-node tools/verify-browser.mjs   # 43 render/interaction checks, refusals included
+node --test "tests/*.test.ts"   # 26 tests: host route, cleanup plan, dictionaries
+node tools/verify-artifact.mjs  # 59 host-route checks against the built bytes
+node tools/verify-browser.mjs   # 47 render/interaction checks, refusals included
 node tools/verify-bundle.mjs    # is the package installable, and installed coherently?
 node tools/verify-boot.mjs --scan   # which running instance carries the row
 node tools/demo-home.mjs            # an isolated home (own DSH_HOME) with blank

@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-session-delete",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Delete-conversation plugin for DSH: a Session menu row that permanently removes one conversation through an authenticated Host route, plus bulk cleanup of unused blank Sessions.",
   "type": "module",
   "license": "MIT",

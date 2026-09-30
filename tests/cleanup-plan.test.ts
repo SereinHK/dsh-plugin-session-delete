@@ -8,115 +8,121 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { BLANK_IDLE_GRACE_MS, describeAge, graceMinutes, planBlankCleanup } from '../src/client/cleanup-plan.ts'
 import type { SessionListLike, SessionSummaryLike } from '../src/client/contract.ts'
+import type { UnusedSessionRow } from '../src/client/host.ts'
 import { en, zh } from '../src/client/locales.ts'
 
 const NOW = 1_800_000_000_000
 const HOUR = 60 * 60 * 1000
 
 /**
- * Build one list snapshot out of compact row declarations.
+ * One durable row as the Host reports it.
  *
- * Rows are durable by default — `projectionValues.sessionListMetadata` is what the
- * cleanup trusts — because that is the shape the shipped store produces for a
- * Session loaded from disk. Pass `blank: false` in the metadata to model one that
- * has started a turn.
+ * Proven and blank by default: that is the shape the Host's projection cache
+ * produces for a stored Session that never started a turn.
  */
-function list(
-  rows: readonly (readonly [string, Partial<SessionSummaryLike>])[],
+function fact(sessionId: string, overrides: Partial<UnusedSessionRow> = {}): UnusedSessionRow {
+  return {
+    sessionId,
+    cwd: `C:\\work\\${sessionId}`,
+    createdAt: NOW - 2 * HOUR,
+    updatedAt: NOW - 2 * HOUR,
+    blank: true,
+    proven: true,
+    lastPromptAt: null,
+    ...overrides
+  }
+}
+
+/** The client list, consulted only for the live facts (running, open). */
+function live(
+  rows: readonly (readonly [string, Partial<SessionSummaryLike>])[] = [],
   current?: string
 ): SessionListLike {
   const byId: Record<string, SessionSummaryLike> = {}
   const ids: string[] = []
   for (const [sessionId, overrides] of rows) {
     ids.push(sessionId)
-    byId[sessionId] = {
-      id: sessionId,
-      running: false,
-      updatedAt: NOW - 2 * HOUR,
-      projectionValues: { sessionListMetadata: { blank: true, lastPromptAt: null } },
-      ...overrides
-    }
+    byId[sessionId] = { id: sessionId, running: false, ...overrides }
   }
   return { ids, byId, current }
 }
 
-/** One row with durable metadata overridden, for the proven-blank cases. */
-function listed(sessionId: string, metadata: { blank?: boolean; lastPromptAt?: number | null }, extra: Partial<SessionSummaryLike> = {}): readonly [string, Partial<SessionSummaryLike>] {
-  return [sessionId, { projectionValues: { sessionListMetadata: metadata }, ...extra }]
-}
-
 test('an idle blank Session is a target', () => {
-  const plan = planBlankCleanup(list([
-    listed('a', { blank: true, lastPromptAt: null }),
-    listed('b', { blank: false, lastPromptAt: NOW - 3 * HOUR })
-  ]), NOW)
+  const plan = planBlankCleanup({ facts: [fact('a'), fact('b', { blank: false, proven: true })] }, NOW)
   assert.deepEqual(plan.targets.map((target) => target.sessionId), ['a'])
   assert.equal(plan.considered, 1)
 })
 
-test('the live blank flag alone never proves blankness', () => {
-  // The regression this feature shipped with: a stored Session's row carries a live
-  // first-turn flag that says nothing, so trusting it deleted nothing at all.
-  const plan = planBlankCleanup(list([['a', { blank: true, projectionValues: undefined }]]), NOW)
+test('a row the Host could not prove is skipped, never targeted', () => {
+  // The regression this feature shipped with twice: the page cannot tell whether a
+  // stored Session is blank, so an unproven row must not be treated as empty.
+  const plan = planBlankCleanup({ facts: [fact('a', { proven: false, blank: false })] }, NOW)
   assert.deepEqual(plan.targets, [])
   assert.equal(plan.unprovenSkipped, 1)
   assert.equal(plan.considered, 0)
 })
 
-test('a Session whose durable metadata says it has a turn is not a target', () => {
-  const plan = planBlankCleanup(list([listed('used', { blank: false, lastPromptAt: NOW - 5 * HOUR })]), NOW)
-  assert.deepEqual(plan.targets, [])
-  assert.equal(plan.unprovenSkipped, 1)
-})
-
-test('a durable last prompt keeps an otherwise stale row inside the grace period', () => {
-  const stale = listed('a', { blank: true, lastPromptAt: NOW - 1000 }, { updatedAt: NOW - 9 * HOUR })
-  const quiet = listed('b', { blank: true, lastPromptAt: null }, { updatedAt: NOW - 9 * HOUR })
-  const plan = planBlankCleanup(list([stale, quiet]), NOW)
-  assert.deepEqual(plan.targets.map((target) => target.sessionId), ['b'])
-  assert.equal(plan.freshSkipped, 1)
-})
-
-test('the open Session is skipped, never deleted', () => {
-  const plan = planBlankCleanup(list([['a', {}], ['b', {}]], 'a'), NOW)
-  assert.deepEqual(plan.targets.map((target) => target.sessionId), ['b'])
-  assert.equal(plan.currentSkipped, 1)
-})
-
-test('a running Session is skipped even while blank', () => {
-  const plan = planBlankCleanup(list([['a', { running: true }], ['b', {}]]), NOW)
-  assert.deepEqual(plan.targets.map((target) => target.sessionId), ['b'])
-  assert.equal(plan.runningSkipped, 1)
-})
-
-test('activity inside the grace period is skipped', () => {
-  const plan = planBlankCleanup(list([
-    listed('fresh', { blank: true, lastPromptAt: null }, { updatedAt: NOW - 1000 }),
-    listed('old', { blank: true, lastPromptAt: null }, { updatedAt: NOW - BLANK_IDLE_GRACE_MS - 1 })
-  ]), NOW)
-  assert.deepEqual(plan.targets.map((target) => target.sessionId), ['old'])
-  assert.equal(plan.freshSkipped, 1)
-})
-
-test('targets read oldest activity first', () => {
-  const plan = planBlankCleanup(list([
-    listed('younger', { blank: true, lastPromptAt: null }, { updatedAt: NOW - 3 * HOUR }),
-    listed('older', { blank: true, lastPromptAt: null }, { updatedAt: NOW - 9 * HOUR }),
-    listed('middle', { blank: true, lastPromptAt: null }, { updatedAt: NOW - 5 * HOUR })
-  ]), NOW)
-  assert.deepEqual(plan.targets.map((target) => target.sessionId), ['older', 'middle', 'younger'])
-})
-
-test('an id with no row is ignored rather than targeted', () => {
-  const snapshot: SessionListLike = { ids: ['ghost'], byId: {}, current: undefined }
-  const plan = planBlankCleanup(snapshot, NOW)
+test('a Session that started a turn is simply not a candidate', () => {
+  const plan = planBlankCleanup({ facts: [fact('used', { blank: false, lastPromptAt: NOW - 5 * HOUR })] }, NOW)
   assert.deepEqual(plan.targets, [])
   assert.equal(plan.considered, 0)
   assert.equal(plan.unprovenSkipped, 0)
 })
 
-test('a target carries its workspace path when the summary has one', () => {
-  const plan = planBlankCleanup(list([listed('a', { blank: true, lastPromptAt: null }, { cwd: 'C:\\work' })]), NOW)
+test('a durable last prompt keeps an otherwise stale row inside the grace period', () => {
+  const plan = planBlankCleanup({
+    facts: [
+      fact('a', { lastPromptAt: NOW - 1000, updatedAt: NOW - 9 * HOUR }),
+      fact('b', { updatedAt: NOW - 9 * HOUR })
+    ]
+  }, NOW)
+  assert.deepEqual(plan.targets.map((target) => target.sessionId), ['b'])
+  assert.equal(plan.freshSkipped, 1)
+})
+
+test('the open Session is skipped, never deleted', () => {
+  const plan = planBlankCleanup({ facts: [fact('a'), fact('b')], live: live([], 'a') }, NOW)
+  assert.deepEqual(plan.targets.map((target) => target.sessionId), ['b'])
+  assert.equal(plan.currentSkipped, 1)
+})
+
+test('a running Session is skipped even while blank', () => {
+  const plan = planBlankCleanup({
+    facts: [fact('a'), fact('b')],
+    live: live([['a', { running: true }]])
+  }, NOW)
+  assert.deepEqual(plan.targets.map((target) => target.sessionId), ['b'])
+  assert.equal(plan.runningSkipped, 1)
+})
+
+test('activity inside the grace period is skipped', () => {
+  const plan = planBlankCleanup({
+    facts: [fact('fresh', { updatedAt: NOW - 1000 }), fact('old', { updatedAt: NOW - BLANK_IDLE_GRACE_MS - 1 })]
+  }, NOW)
+  assert.deepEqual(plan.targets.map((target) => target.sessionId), ['old'])
+  assert.equal(plan.freshSkipped, 1)
+})
+
+test('targets read oldest activity first', () => {
+  const plan = planBlankCleanup({
+    facts: [
+      fact('younger', { updatedAt: NOW - 3 * HOUR }),
+      fact('older', { updatedAt: NOW - 9 * HOUR }),
+      fact('middle', { updatedAt: NOW - 5 * HOUR })
+    ]
+  }, NOW)
+  assert.deepEqual(plan.targets.map((target) => target.sessionId), ['older', 'middle', 'younger'])
+})
+
+test('an empty Host answer plans nothing and claims nothing', () => {
+  const plan = planBlankCleanup({ facts: [] }, NOW)
+  assert.deepEqual(plan.targets, [])
+  assert.equal(plan.considered, 0)
+  assert.equal(plan.unprovenSkipped, 0)
+})
+
+test('a target carries the workspace path the Host reported', () => {
+  const plan = planBlankCleanup({ facts: [fact('a', { cwd: 'C:\\work' })] }, NOW)
   assert.equal(plan.targets[0]?.cwd, 'C:\\work')
 })
 

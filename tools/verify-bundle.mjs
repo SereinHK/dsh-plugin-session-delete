@@ -94,7 +94,8 @@ console.log('the installed copy is complete')
   if (existsSync(clientPath)) {
     const client = readFileSync(clientPath, 'utf8')
     check('the installed client bundle declares this package id', client.includes(`id: "${PACKAGE_NAME}"`))
-    check('the installed client bundle owns the Host route', client.includes('/api/session.delete'))
+    check('the installed client bundle owns the delete route', client.includes('/api/session.delete'))
+    check('and the durable-facts route', client.includes('/api/session.unused'))
     console.log(`  ..   client bundle ${String(statSync(clientPath).size)} bytes`)
   }
 }

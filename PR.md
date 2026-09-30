@@ -17,7 +17,11 @@ additive surfaces and no takeover:
 | Sidebar foot | `sidebar.footer.action` (order 500) | **“Clean up empty conversations”**: bulk-removes blank Sessions |
 | Frame overlay | `shell.overlay` (two entries) | The two confirmations, each listing exactly what will be removed |
 
-The node half registers one authenticated route, `POST /api/session.delete`, through
+The node half registers two authenticated routes through Connection's `/api` fence:
+`POST /api/session.delete` for one removal, and `POST /api/session.unused`, which
+reports the durable per-Session facts (whether the stored log holds an accepted prompt,
+and when the last one was) that a browser cannot derive for a Session it has not
+opened. The original single route, plus
 `ctx.connection.fetch.register` — inside Connection's Host/Origin + browser-token
 fence — and both surfaces call it.
 

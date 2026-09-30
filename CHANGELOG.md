@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.2
+
+The blank-Session cleanup works, by asking the Host instead of guessing.
+
+0.1.1 changed *which* page-side flag the cleanup trusted. That was still the wrong
+question: for a Session loaded from disk, the page has no durable answer at all — a
+list row's `blank` describes a Session resident in *this process*, and its projection
+block is loaded only for the Session being viewed. A run therefore reported "nothing to
+clean" over a workspace full of empty conversations.
+
+- **New Host route `POST /api/session.unused`** reports the durable per-Session facts
+  from the same projection cache the Session list itself uses: whether the stored log
+  holds an accepted prompt, when the last one was, and whether the cache could answer
+  at all. The plugin applies its policy (grace window, live Session, open Session) to
+  those facts rather than to a display row.
+- **Unprovable rows are never deleted**: a Session whose projection the Host cannot
+  read is reported as unproven and skipped, and the dialog says so instead of implying
+  the workspace is clean. A Host failure is worded as a failure, never as "nothing to
+  clean".
+- The cleanup dialog loads those facts on open and shows what it is waiting for.
+- Suites: 26 package tests, 59 host-route checks against the built bytes (the new route
+  included, proven/unproven/cache-failure cases among them), 47 render and interaction
+  checks.
+
 ## 0.1.1
 
 Fixes the blank-Session cleanup, which never found anything to remove.

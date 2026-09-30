@@ -10,6 +10,8 @@
  * @module @deepseek-ai/dsh-client-ui-session-delete/client/pending
  */
 import * as React from 'react'
+import { listUnusedSessions } from './host'
+import type { UnusedSessionRow } from './host'
 
 /** One conversation's removal request, opened from its row menu. */
 export interface DeleteRequest {
@@ -18,9 +20,21 @@ export interface DeleteRequest {
   readonly displayTitle: string
 }
 
-/** A bulk blank-Session cleanup request, opened from the sidebar action. */
+/**
+ * A bulk blank-Session cleanup request, opened from the sidebar action.
+ *
+ * The durable facts come from the Host, so the request carries its own load state:
+ * the dialog cannot decide anything until they arrive, and the page has no other
+ * way to learn whether a stored Session is blank.
+ */
 export interface CleanupRequest {
   readonly kind: 'cleanup'
+  /** True while the Host's durable facts are in flight. */
+  readonly loading: boolean
+  /** The Host's rows once they arrive. */
+  readonly rows?: readonly UnusedSessionRow[] | undefined
+  /** Why the load failed, worded for the operator by the dialog. */
+  readonly loadError?: unknown
 }
 
 /** Either pending request. */
@@ -60,10 +74,30 @@ export function requestDelete(sessionId: string, displayTitle: string): void {
   publish()
 }
 
-/** Open the blank-Session cleanup confirmation. */
+/**
+ * Open the blank-Session cleanup confirmation.
+ *
+ * The Host is asked for the durable per-Session facts first, and the dialog shows
+ * its loading state until they arrive. A failure is carried on the request so the
+ * dialog can word it, rather than being swallowed into an empty plan — which would
+ * read as "nothing to clean" when the truth is "we could not find out".
+ */
 export function requestCleanup(): void {
-  pending = { kind: 'cleanup' }
+  pending = { kind: 'cleanup', loading: true }
   publish()
+  void listUnusedSessions().then(
+    (rows) => {
+      // A newer request (or a dismissal) owns the store now; drop this answer.
+      if (pending === null || pending.kind !== 'cleanup') return
+      pending = { kind: 'cleanup', loading: false, rows }
+      publish()
+    },
+    (error: unknown) => {
+      if (pending === null || pending.kind !== 'cleanup') return
+      pending = { kind: 'cleanup', loading: false, loadError: error }
+      publish()
+    }
+  )
 }
 
 /** Close the pending confirmation (accepted, cancelled, or dismissed). */

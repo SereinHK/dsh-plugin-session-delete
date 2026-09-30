@@ -44,7 +44,9 @@ dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-sessio
 - `sidebar.footer.action` —— 设置旁的 **「清理空会话」**：一次删掉所有
   `blank: true`（从未开始过任何一轮对话）的空会话。
 - `shell.overlay` —— 两个确认框，都会先列出「到底要删什么」。
-- Node 面在 Connection 的 `/api` 认证围栏内注册 `POST /api/session.delete`，
+- Node 面在 Connection 的 `/api` 认证围栏内注册**两条**路由：`POST /api/session.delete` 删一个对话，
+  `POST /api/session.unused` 报告每个会话的**持久事实**（日志是否从未使用过、最后一次提问时间）——
+  这些事实页面自己拿不到。
   两个入口都走这一条路由。
 
 删除不可恢复：会话根目录下该会话的整个目录（含全部格式世代）与它的投影缓存记录
@@ -130,8 +132,8 @@ dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-sessio
 仓库用 `pnpm run bundle`（tsdown）构建。本工作区没有工具链，所以同一份 `lib/` 由
 `tools/build.mjs` 从这些源码生成（用 Node 自带的类型剥离），并把 `src/client/*` 模块图
 拼成 Host 原样提供的 `window.__ModuleLoader__.load({ id, factory })` 脚本。
-两份产物随后由 `tools/verify-artifact.mjs`（对构建产物跑 39 项路由断言）、`tools/verify-browser.mjs`
-（43 项渲染与交互断言，含拒绝路径）和
+两份产物随后由 `tools/verify-artifact.mjs`（对构建产物跑 59 项路由断言）、`tools/verify-browser.mjs`
+（47 项渲染与交互断言，含拒绝路径）和
 `tools/verify-boot.mjs`（读取运行中应用的浏览器插件图）验证。
 
 ```sh
