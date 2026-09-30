@@ -266,7 +266,10 @@ if (registerOnly) {
 // `--bundle` selects the second, and each mode clears the other's registration so
 // a switch back and forth cannot leave the row inserted twice.
 const profileManifestPath = join(profileDir, 'package.json')
-const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15)
+// A filesystem-safe stamp: ISO-8601 with every separator AND the fraction removed.
+// Keeping the fraction's dot produced names ending in ".", which Windows accepts
+// through the extended-length path but ordinary delete tools cannot remove.
+const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
 
 if (bundleMode) {
   const before = readFileSync(profileManifestPath, 'utf8')
