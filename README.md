@@ -37,6 +37,9 @@ layer.
 ```sh
 # from GitHub — use the https form (see the note below)
 dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-session-delete.git
+
+# or the packaged tarball attached to the latest release: no git needed
+dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-session-delete/releases/download/v0.1.2/dsh-plugin-session-delete-0.1.2.tgz
 ```
 
 Or paste the same spec into the sidebar's **Plugins** page. The package carries its
@@ -44,6 +47,12 @@ own bundle patch (`dsh.bundle.patch`), so the plugin row is inserted for you —
 hand-editing of the profile's `cordis.patch.yml`. Reload the window (or the instance)
 afterwards; `lib/` ships prebuilt, so nothing is compiled during install.
 
+> **Two distribution forms, one package.** The git address is what the project itself
+> uses and follows a branch; the release tarball is a frozen snapshot of the same bytes
+> and needs **no `git` on the installing machine** — pnpm fetches an https URL like any
+> other. Both install identically: the tarball ships `lib/`, `cordis.patch.yml` and the
+> manifest that declares the bundle patch.
+>
 > **Not published to npm.** This repository is the distribution channel, so the registry
 > form (`dsh plugin --profile <profile> add dsh-plugin-session-delete`) has nothing to
 > resolve — use the `https://…` address above.

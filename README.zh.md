@@ -15,12 +15,19 @@ kind: "package-reference"
 ```sh
 # 从 GitHub 安装 —— 用 https 形式(原因见下方提示)
 dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-session-delete.git
+
+# 或者用挂在 Release 上的打包文件:装的那台机器不需要 git
+dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-session-delete/releases/download/v0.1.2/dsh-plugin-session-delete-0.1.2.tgz
 ```
 
 或者把同一个 spec 粘进侧边栏的 **Plugins** 页。包自带 bundle 补丁(`dsh.bundle.patch`),
 那一行插件行会被自动插入,不需要手改 profile 的 `cordis.patch.yml`。
 装完刷新窗口(或那个实例)即可;`lib/` 随仓库提供,安装时不编译任何东西。
 
+> **两种分发形式,同一个包。** git 地址是项目自己用的方式,跟随分支;Release 上的 tarball
+> 是同一份字节的冻结快照,而且**装的那台机器不需要装 `git`** —— pnpm 只是照常拉一个 https 地址。
+> 两者装出来的东西完全一样:tarball 里同样带 `lib/`、`cordis.patch.yml` 和声明 bundle 补丁的清单。
+>
 > **没有发布到 npm。** 仓库就是分发渠道,所以直接写包名的 registry 形式
 > (`dsh plugin --profile <profile> add dsh-plugin-session-delete`)解析不到 —— 请用上面那个
 > `https://…` 地址。
