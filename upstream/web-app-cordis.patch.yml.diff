@@ -1,0 +1,17 @@
+diff --git a/packages/bundle/web-app/cordis.patch.yml b/packages/bundle/web-app/cordis.patch.yml
+index f9c2abf..ad6440f 100644
+--- a/packages/bundle/web-app/cordis.patch.yml
++++ b/packages/bundle/web-app/cordis.patch.yml
+@@ -343,6 +343,12 @@
+     - id: ui-workspace
+       name: '@deepseek-ai/dsh-client-ui-workspace'
+ 
++    # Delete-conversation: a "delete conversation" row in every Session's
++    # "..." menu and a blank-Session cleanup action at the sidebar foot, over
++    # the authenticated POST /api/session.delete route its node half registers.
++    - id: session-delete
++      name: '@deepseek-ai/dsh-client-ui-session-delete'
++
+     # Durable workflow lifecycle as an independent Chat node after the
+     # existing generic workflow tool row.
+     - id: ui-workflow-run

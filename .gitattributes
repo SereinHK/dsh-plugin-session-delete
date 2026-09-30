@@ -1,0 +1,4 @@
+# Keep the tree LF everywhere: the host serves lib/client.js verbatim, and a
+# CRLF round-trip through a Windows checkout is one more way for the served bytes
+# to differ from the bytes that were verified.
+* text=auto eol=lf

@@ -1,0 +1,7 @@
+# lib/ is committed ON PURPOSE: DSH serves prebuilt client bundles and an
+# install runs no bundler, so a git install needs the built bytes in the tree.
+# (The upstream monorepo ignores lib/ because its CI builds before publishing.)
+node_modules/
+.upstream-diff/
+*.bak-*
+.DS_Store
