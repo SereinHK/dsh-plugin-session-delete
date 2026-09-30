@@ -49,6 +49,12 @@ const sessionsRoot = join(demoHome, 'sessions')
 // backend refuse the whole root ("uses .jsonl, but this backend is configured for
 // compression zstd"), which takes the workspace registry down with it.
 rmSync(sessionsRoot, { recursive: true, force: true })
+// The persisted registries go too. `storages/workspace.json` remembers Session ids
+// that no longer have a directory (which is how a deleted Session leaves the list),
+// so re-seeding fixtures without it leaves the old ids listed as ghosts. With no
+// registry the app derives the workspaces from the logs on disk — the state a reset
+// is supposed to produce.
+rmSync(join(demoHome, 'storages'), { recursive: true, force: true })
 const projectDir = join(sessionsRoot, projectKey(workspace))
 mkdirSync(projectDir, { recursive: true })
 
