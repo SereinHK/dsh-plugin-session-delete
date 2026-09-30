@@ -7,14 +7,35 @@ kind: "package-reference"
 
 English | [中文](README.zh.md)
 
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![DSH 0.2.x](https://img.shields.io/badge/DSH-0.2.x-blueviolet)
+![verify](https://github.com/SereinHK/dsh-plugin-session-delete/actions/workflows/verify.yml/badge.svg)
+
 A [DSH](https://github.com/deepseek-ai/deepseek-harness) plugin: **delete a conversation**,
 for real, from disk — plus bulk cleanup of empty Sessions.
+
+DSH has no delete on purpose: archiving is the shipped non-destructive path, and its
+storage backend (`SessionPersistence`) only creates, opens, flushes, stats and lists. This
+plugin exists for the other case — when you want the bytes gone — and keeps every policy
+decision (what may be removed, what must be refused) in the plugin rather than in a storage
+layer.
+
+> **Before you install: it deletes, and there is no undo.** One run removes the whole
+> Session directory under the sessions root — **every format generation** of its log — plus
+> its projection-cache record. A Session that is live in the process is refused
+> (`session-live`), and the cleanup action additionally skips the open Session, anything
+> running, and anything with activity inside a one-hour grace window. Attachments, exported
+> files and workspace files are never touched. If you want a recoverable action, use DSH's
+> archive instead.
 
 ## Install
 
 ```sh
 # from GitHub — use the https form (see the note below)
 dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-session-delete.git
+
+# pin a tag, if you would rather not track main
+dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-session-delete.git#v0.1.0
 ```
 
 Or paste the same spec into the sidebar's **Plugins** page. The package carries its
@@ -152,8 +173,12 @@ node tools/verify-artifact.mjs  # 39 host-route checks against the built bytes
 node tools/verify-browser.mjs   # 42 render/interaction checks, refusals included
 node tools/verify-bundle.mjs    # is the package installable, and installed coherently?
 node tools/verify-boot.mjs --scan   # which running instance carries the row
-node install.mjs [--profile web] [--bundle] [--uninstall]   # local source install
+node install.mjs [--profile web] [--bundle] [--register-only] [--uninstall]
 ```
+
+Requires **Node 22.6+**: the build and the suites use Node's own TypeScript stripping
+rather than a toolchain. CI runs exactly the commands above on Node 24 (`.github/workflows/verify.yml`),
+with no install step and no network.
 
 `lib/` is **committed on purpose**: DSH serves prebuilt client bundles and runs no
 bundler at install time, so a git install needs the built bytes in the tree. That is

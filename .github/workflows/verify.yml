@@ -1,0 +1,32 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Every step is dependency-free: the suites run on Node's own TypeScript
+# stripping and the build assembles the client bundle itself, so no install step
+# (and no network) is needed. That also means a green run says something about
+# the committed bytes rather than about a lockfile.
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: The committed lib/ matches src/
+        run: node tools/build.mjs --check
+
+      - name: Package tests (host route, cleanup plan, dictionaries)
+        run: node --test "tests/*.test.ts"
+
+      - name: Host routes against the built bytes
+        run: node tools/verify-artifact.mjs
+
+      - name: Render and interaction paths, refusals included
+        run: node tools/verify-browser.mjs

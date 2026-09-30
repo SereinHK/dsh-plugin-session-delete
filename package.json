@@ -4,6 +4,14 @@
   "description": "Delete-conversation plugin for DSH: a Session menu row that permanently removes one conversation through an authenticated Host route, plus bulk cleanup of unused blank Sessions.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SereinHK/dsh-plugin-session-delete.git"
+  },
+  "homepage": "https://github.com/SereinHK/dsh-plugin-session-delete#readme",
+  "bugs": {
+    "url": "https://github.com/SereinHK/dsh-plugin-session-delete/issues"
+  },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
@@ -37,6 +45,7 @@
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
