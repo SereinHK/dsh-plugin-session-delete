@@ -179,8 +179,16 @@ node tools/verify-artifact.mjs  # 39 host-route checks against the built bytes
 node tools/verify-browser.mjs   # 42 render/interaction checks, refusals included
 node tools/verify-bundle.mjs    # is the package installable, and installed coherently?
 node tools/verify-boot.mjs --scan   # which running instance carries the row
+node tools/demo-home.mjs            # an isolated home (own DSH_HOME) with blank
+                                    # Sessions, for screenshots or a safe review
 node install.mjs [--profile web] [--bundle] [--register-only] [--uninstall]
 ```
+
+`tools/demo-home.mjs` copies a working profile into a separate `DSH_HOME` and seeds
+blank Sessions there, so the UI can be exercised (or photographed) without exposing a
+real workspace. Run that home with `DSH_HOME=<dir> dsh --profile demo --port <n>`
+— note that with a profile name, `dsh` takes no subcommand: `--profile <name>` *is* the
+request to run it.
 
 Requires **Node 22.6+**: the build and the suites use Node's own TypeScript stripping
 rather than a toolchain. CI runs exactly the commands above on Node 24 (`.github/workflows/verify.yml`),
