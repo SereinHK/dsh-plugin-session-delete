@@ -53,10 +53,19 @@ try {
   exists = true
 } catch (error) {
   const stderr = String(error.stderr ?? '')
-  if (/Repository not found|not found/i.test(stderr)) detail = 'not created yet'
-  else detail = `could not confirm: ${stderr.split('\n').map((line) => line.trim()).filter(Boolean)[0] ?? 'unknown error'}`
+  const status = error.status
+  // `--exit-code` answers 2 for "no matching refs", which is exactly what a
+  // freshly created, still empty repository looks like — not a miss.
+  if (status === 2) {
+    exists = true
+    detail = 'reachable, empty (no refs yet)'
+  } else if (/Repository not found|not found/i.test(stderr)) {
+    detail = 'not created yet'
+  } else {
+    detail = `could not confirm: ${stderr.split('\n').map((line) => line.trim()).filter(Boolean)[0] ?? `git exited ${String(status)}`}`
+  }
 }
-console.log(`remote exists: ${exists ? 'yes' : detail}`)
+console.log(`remote exists: ${exists ? detail : detail}`)
 
 if (!exists) {
   console.log('')
