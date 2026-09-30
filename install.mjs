@@ -59,8 +59,17 @@ const uninstall = argv.includes('--uninstall')
 const skipChecks = argv.includes('--no-checks')
 /** Register through the package's own bundle patch instead of a profile patch row. */
 const bundleMode = argv.includes('--bundle')
-/** Optional dependency spec to record alongside `--bundle` (e.g. github:you/repo). */
+/** Optional dependency spec to record alongside `--bundle` (e.g. https://github.com/you/repo.git). */
 const installSpec = option('--spec')
+/**
+ * Rewrite only the registration, leaving every installed file alone.
+ *
+ * The Plugins page installs a package itself (pnpm fetches it, the bundle list is
+ * updated), and re-copying the directory afterwards would replace a
+ * package-manager-owned tree with a plain one. This mode exists for exactly that
+ * case: fix which layer owns the row without touching what is installed.
+ */
+const registerOnly = argv.includes('--register-only')
 const source = resolve(option('--source') ?? here)
 const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 // Precedence: an explicit flag beats the ambient environment. A shell running
@@ -217,7 +226,7 @@ if (uninstall) {
 }
 
 // 1-2. the build must be current and must pass its own artifact checks ----------
-if (!skipChecks) {
+if (!skipChecks && !registerOnly) {
   const { spawnSync } = await import('node:child_process')
   for (const [script, extra] of [['tools/build.mjs', ['--check']], ['tools/verify-artifact.mjs', []]]) {
     const run = spawnSync(process.execPath, [join(here, script), ...extra], { cwd: here, stdio: 'inherit' })
@@ -229,14 +238,19 @@ if (!skipChecks) {
 // 3. package copy ---------------------------------------------------------------
 // cordis.patch.yml ships with the package because `dsh.bundle.patch` points at
 // it: a bundle install reads the row from the installed copy, not from this
-// checkout.
-rmSync(moduleDir, { recursive: true, force: true })
-mkdirSync(moduleDir, { recursive: true })
-for (const item of ['package.json', 'cordis.patch.yml', 'README.md', 'LICENSE']) {
-  if (existsSync(join(source, item))) cpSync(join(source, item), join(moduleDir, item))
+// checkout. `--register-only` skips this so a package-manager-owned tree stays
+// exactly as its manager left it.
+if (registerOnly) {
+  console.log(`left the installed files alone (--register-only): ${moduleDir}`)
+} else {
+  rmSync(moduleDir, { recursive: true, force: true })
+  mkdirSync(moduleDir, { recursive: true })
+  for (const item of ['package.json', 'cordis.patch.yml', 'README.md', 'LICENSE']) {
+    if (existsSync(join(source, item))) cpSync(join(source, item), join(moduleDir, item))
+  }
+  cpSync(join(source, 'lib'), join(moduleDir, 'lib'), { recursive: true })
+  console.log(`installed ${PACKAGE_NAME} -> ${moduleDir}`)
 }
-cpSync(join(source, 'lib'), join(moduleDir, 'lib'), { recursive: true })
-console.log(`installed ${PACKAGE_NAME} -> ${moduleDir}`)
 
 // The earlier copy is NOT removed here, and that ordering is deliberate: while
 // the running composition still carries its row, deleting its files leaves a
