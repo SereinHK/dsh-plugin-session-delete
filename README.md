@@ -33,9 +33,6 @@ layer.
 ```sh
 # from GitHub — use the https form (see the note below)
 dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-session-delete.git
-
-# pin a tag, if you would rather not track main
-dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-session-delete.git#v0.1.0
 ```
 
 Or paste the same spec into the sidebar's **Plugins** page. The package carries its
@@ -47,6 +44,15 @@ afterwards; `lib/` ships prebuilt, so nothing is compiled during install.
 > normalizes the shorthand to an SSH URL (`git+ssh://git@github.com/…`), which fails
 > on any machine without an SSH key for GitHub. Both forms select the same commit; the
 > https one needs nothing but the public repo.
+>
+> **What gets pinned, and what does not.** The install records the dependency without a
+> ref, so it follows the default branch — but pnpm's lockfile pins the exact commit it
+> resolved, so re-running the install does not move it on its own. To follow a release
+> deliberately, write the ref into the profile's `package.json` and re-run the install:
+>
+> ```json
+> "dsh-plugin-session-delete": "git+https://github.com/SereinHK/dsh-plugin-session-delete.git#v0.1.0"
+> ```
 >
 > The desktop app supplies its own package manager, so the Plugins page works without
 > `pnpm` on `PATH`. A bare `dsh plugin` command needs `pnpm` available.
