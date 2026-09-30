@@ -44,6 +44,10 @@ own bundle patch (`dsh.bundle.patch`), so the plugin row is inserted for you —
 hand-editing of the profile's `cordis.patch.yml`. Reload the window (or the instance)
 afterwards; `lib/` ships prebuilt, so nothing is compiled during install.
 
+> **Not published to npm.** This repository is the distribution channel, so the registry
+> form (`dsh plugin --profile <profile> add dsh-plugin-session-delete`) has nothing to
+> resolve — use the `https://…` address above.
+>
 > **Use the `https://…` address, not the `github:owner/repo` shorthand.** pnpm
 > normalizes the shorthand to an SSH URL (`git+ssh://git@github.com/…`), which fails
 > on any machine without an SSH key for GitHub. Both forms select the same commit; the

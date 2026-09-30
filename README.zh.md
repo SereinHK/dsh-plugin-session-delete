@@ -21,6 +21,10 @@ dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-sessio
 那一行插件行会被自动插入,不需要手改 profile 的 `cordis.patch.yml`。
 装完刷新窗口(或那个实例)即可;`lib/` 随仓库提供,安装时不编译任何东西。
 
+> **没有发布到 npm。** 仓库就是分发渠道,所以直接写包名的 registry 形式
+> (`dsh plugin --profile <profile> add dsh-plugin-session-delete`)解析不到 —— 请用上面那个
+> `https://…` 地址。
+>
 > **请用 `https://…` 地址,不要用 `github:owner/repo` 简写。** pnpm 会把简写规范化成
 > SSH 地址(`git+ssh://git@github.com/…`),在任何没配 GitHub SSH key 的机器上直接失败。
 > 两种写法指向同一个提交,但 https 只需要一个公开仓库。
