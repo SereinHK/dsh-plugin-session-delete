@@ -80,7 +80,9 @@ dsh-plugin-session-delete`. From a source checkout, `node install.mjs --uninstal
   authenticated `/api` fence: `POST /api/session.delete` for one removal, and
   `POST /api/session.unused`, which reports the durable per-Session facts (is the
   log empty, and when was it last prompted) that the page cannot derive for itself.
-  authenticated `/api` fence; both surfaces call it.
+  Both surfaces call the first one.
+
+![The cleanup lists what it would remove, and says what it skips](docs/screenshot-cleanup.png)
 
 Deletion is irreversible: the whole Session directory under the sessions root
 (every format generation) and its projection-cache record are removed. Exported

@@ -26,6 +26,38 @@ const realProfile = join(dshHome, 'profiles', process.env.SOURCE_PROFILE ?? 'web
 const demoHome = resolve(process.argv[2] ?? join(homedir(), 'dsh-demo'))
 const demoProfile = join(demoHome, 'profiles', 'demo')
 
+/**
+ * The projection rows the runtime writes for a Session whose log holds nothing but
+ * its header — copied from a real cache record of exactly that shape (`version: 7`,
+ * `formatVersion: 4`), with only the identity fields parameterised per fixture.
+ */
+const BLANK_PROJECTION_ROWS = {
+  title: { ver: 1, val: null },
+  titleInput: { ver: 3, val: { first: null, count: 0, lastSeq: null } },
+  llmRetry: { ver: 1, val: {} },
+  sandboxMode: { ver: 1, val: 'workspace-write' },
+  goal: { ver: 6, val: { current: null, seenGoalIds: [], failure: null } },
+  tokenUsage: { ver: 2, val: { totals: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, last: null } },
+  contextPressure: { ver: 5, val: { surfaceTokens: 0 } },
+  contextBreakdown: { ver: 5, val: { nodes: [], breakdown: { systemTokens: 0, toolsTokens: 0, messageTokens: 0 } } },
+  turnBoundary: { ver: 2, val: { openTurnStartSeq: null, lastStepStartSeq: null, lastStepBoundary: null, lastTurn: 0 } },
+  inbox: { ver: 1, val: { 'next-turn': [], 'next-step': [] } },
+  sessionStats: { ver: 1, val: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, lastTurn: null, openStep: null, pendingCalls: {} } },
+  turnOutline: { ver: 2, val: { turns: [], draft: '' } },
+  agentPreset: { ver: 1, val: 'standard' },
+  userQuestions: { ver: 2, val: { inheritedEventCount: 0, timed: false, questions: { active: [], settled: [] } } },
+  subagentCatalog: { ver: 3, val: { inheritedEventCount: 0 } },
+  subagentTiming: { ver: 3, val: { descriptorSeen: false, settledMs: 0 } },
+  subagent: { ver: 2, val: {} },
+  permissions: { ver: 2, val: { preset: 'workspace-write', sandbox: 'workspace-write', approval: 'ask', seeded: true } },
+  todos: { ver: 2, val: null },
+  plan: { ver: 3, val: { active: false, wanted: null, running: null, activeAtLastHeader: null } },
+  subagentModelSelectionPolicy: { ver: 1, val: null },
+  modelSelection: { ver: 2, val: { lastUsed: null, pending: null } },
+  sessionListMetadata: { ver: 1, val: { blank: true, lastPromptAt: null } },
+  imageLimits: { ver: 1, val: null }
+}
+
 if (!existsSync(join(realProfile, 'package.json'))) throw new Error(`no source profile at ${realProfile}`)
 if (existsSync(demoProfile)) {
   rmSync(demoProfile, { recursive: true, force: true })
@@ -57,6 +89,8 @@ rmSync(sessionsRoot, { recursive: true, force: true })
 rmSync(join(demoHome, 'storages'), { recursive: true, force: true })
 const projectDir = join(sessionsRoot, projectKey(workspace))
 mkdirSync(projectDir, { recursive: true })
+const cacheDir = join(demoHome, 'storages', 'session_projcache', 'sessions')
+mkdirSync(cacheDir, { recursive: true })
 
 const seeded = []
 for (const [index, age] of ages.entries()) {
@@ -80,6 +114,21 @@ for (const [index, age] of ages.entries()) {
   writeFileSync(path, zstdCompressSync(Buffer.from(line, 'utf8')))
   const roundTrip = zstdDecompressSync(readFileSync(path)).toString('utf8')
   if (roundTrip !== line) throw new Error(`fixture did not round-trip: ${path}`)
+
+  // The Host projects a stored Session lazily — nothing is projected until the app
+  // has a reason to look — so the durable-facts route would call every fixture
+  // unproven, and the cleanup would honestly refuse to remove them. These records
+  // are what the runtime's own projector writes for a header-only log (read off a
+  // real one, same schema and version); they state a fact about the fixture, they
+  // do not stand in for the code being tested.
+  writeFileSync(join(cacheDir, `${id}.json`), JSON.stringify({
+    version: 7,
+    record: {
+      identity: { formatVersion: 4, createdAt: header.createdAt, cwd: header.cwd, isSeeded: false, inheritedEventCount: 0 },
+      rows: Object.fromEntries(Object.entries(BLANK_PROJECTION_ROWS).map(([key, value]) => [key, { ...value, seq: 3 }]))
+    }
+  }, undefined, 2), 'utf8')
+
   seeded.push({ id, ageMinutes: Math.round(age / 60000), bytes: statSync(path).size })
 }
 console.log('')

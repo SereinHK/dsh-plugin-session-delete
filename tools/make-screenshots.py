@@ -29,8 +29,29 @@ JOBS = [
     ),
 ]
 
+# Captures that arrived as chat attachments rather than files in the Screenshots
+# folder: (absolute source, destination, box, target width).
+ATTACHMENTS = [
+    (
+        r"C:\Users\Administrator\.dsh\attachments\v1\objects\7e\7e2ae0e44c7615d0cf429ac689898128b248eb476bc11e535aa64185ce207268",
+        "screenshot-cleanup.png",
+        (400, 240, 1520, 880),
+        1000,
+    ),
+]
+
 for source, destination, box, target_width in JOBS:
     image = Image.open(SHOTS / source).convert("RGB")
+    cropped = image.crop(box)
+    if target_width is not None and cropped.width > target_width:
+        height = round(cropped.height * target_width / cropped.width)
+        cropped = cropped.resize((target_width, height), Image.LANCZOS)
+    out = DOCS / destination
+    cropped.save(out, format="PNG", optimize=True)
+    print(f"{destination}: {cropped.width}x{cropped.height}, {out.stat().st_size // 1024} KB")
+
+for source, destination, box, target_width in ATTACHMENTS:
+    image = Image.open(source).convert("RGB")
     cropped = image.crop(box)
     if target_width is not None and cropped.width > target_width:
         height = round(cropped.height * target_width / cropped.width)
