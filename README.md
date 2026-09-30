@@ -13,14 +13,22 @@ for real, from disk — plus bulk cleanup of empty Sessions.
 ## Install
 
 ```sh
-# from GitHub (the plugin manager pre-checks the repo, then pnpm fetches it)
-dsh plugin --profile <profile> add github:SereinHK/dsh-plugin-session-delete
+# from GitHub — use the https form (see the note below)
+dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-session-delete.git
 ```
 
 Or paste the same spec into the sidebar's **Plugins** page. The package carries its
 own bundle patch (`dsh.bundle.patch`), so the plugin row is inserted for you — no
 hand-editing of the profile's `cordis.patch.yml`. Reload the window (or the instance)
 afterwards; `lib/` ships prebuilt, so nothing is compiled during install.
+
+> **Use the `https://…` address, not the `github:owner/repo` shorthand.** pnpm
+> normalizes the shorthand to an SSH URL (`git+ssh://git@github.com/…`), which fails
+> on any machine without an SSH key for GitHub. Both forms select the same commit; the
+> https one needs nothing but the public repo.
+>
+> The desktop app supplies its own package manager, so the Plugins page works without
+> `pnpm` on `PATH`. A bare `dsh plugin` command needs `pnpm` available.
 
 **Requirements:** DSH **0.2.x**. The row menu extension point this plugin registers
 into (`sidebar.workspaces.session.menu.item`) does not exist in the 0.1.x line — on

@@ -13,13 +13,20 @@ kind: "package-reference"
 ## 安装
 
 ```sh
-# 从 GitHub 安装(插件管理器会先用 git ls-remote 探仓库,再交给 pnpm)
-dsh plugin --profile <profile> add github:SereinHK/dsh-plugin-session-delete
+# 从 GitHub 安装 —— 用 https 形式(原因见下方提示)
+dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-session-delete.git
 ```
 
 或者把同一个 spec 粘进侧边栏的 **Plugins** 页。包自带 bundle 补丁(`dsh.bundle.patch`),
 那一行插件行会被自动插入,不需要手改 profile 的 `cordis.patch.yml`。
 装完刷新窗口(或那个实例)即可;`lib/` 随仓库提供,安装时不编译任何东西。
+
+> **请用 `https://…` 地址,不要用 `github:owner/repo` 简写。** pnpm 会把简写规范化成
+> SSH 地址(`git+ssh://git@github.com/…`),在任何没配 GitHub SSH key 的机器上直接失败。
+> 两种写法指向同一个提交,但 https 只需要一个公开仓库。
+>
+> 桌面应用自带包管理器,所以从 Plugins 页安装不需要 `pnpm` 在 `PATH` 上;
+> 直接用 `dsh plugin` 命令则需要。
 
 **版本要求:DSH 0.2.x。** 本插件注册的会话行菜单槽位
 (`sidebar.workspaces.session.menu.item`)在 0.1.x 那条线上**不存在** ——
