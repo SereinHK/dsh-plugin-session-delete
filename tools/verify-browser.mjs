@@ -245,9 +245,18 @@ function translator() {
     return value
   }
 }
-/** One fake Session summary. */
+/**
+ * One fake Session summary, in the shape the shipped store produces for a Session
+ * loaded from disk: blankness lives in the durable projection, not in the live flag.
+ */
 function summary(sessionId, overrides = {}) {
-  return { sessionId, blank: true, running: false, updatedAt: Date.now() - 3 * 60 * 60 * 1000, ...overrides }
+  return {
+    id: sessionId,
+    running: false,
+    updatedAt: Date.now() - 3 * 60 * 60 * 1000,
+    projectionValues: { sessionListMetadata: { blank: true, lastPromptAt: null } },
+    ...overrides
+  }
 }
 /** Find the handler whose rendered label matches. */
 function handlerFor(tree, pattern) {
@@ -313,13 +322,16 @@ check('the dialog closes after it settles', renderRoot(deleteDialog.Component, {
 console.log('')
 console.log('blank-Session cleanup')
 list = {
-  ids: ['session-open', 'session-blank-old', 'session-blank-fresh', 'session-used', 'session-running'],
+  ids: ['session-open', 'session-blank-old', 'session-blank-fresh', 'session-used', 'session-running', 'session-unproven'],
   byId: {
     'session-open': summary('session-open'),
     'session-blank-old': summary('session-blank-old', { cwd: 'C:\\work\\alpha' }),
     'session-blank-fresh': summary('session-blank-fresh', { updatedAt: Date.now() - 60_000 }),
-    'session-used': summary('session-used', { blank: false }),
-    'session-running': summary('session-running', { running: true })
+    // "Used" has to be expressed durably: the live flag on its own is not proof.
+    'session-used': summary('session-used', { projectionValues: { sessionListMetadata: { blank: false, lastPromptAt: Date.now() - 5 * 60 * 60 * 1000 } } }),
+    'session-running': summary('session-running', { running: true }),
+    // No projection yet: the cleanup must skip it rather than guess.
+    'session-unproven': { id: 'session-unproven', running: false, updatedAt: Date.now() - 9 * 60 * 60 * 1000 }
   },
   current: 'session-open'
 }
@@ -345,6 +357,7 @@ check('it lists the workspace path of what will go', cleanupText.includes('C:\\w
 check('it explains the grace period', cleanupText.includes('60 分钟'), cleanupText)
 check('the open Session is not listed', !cleanupText.includes('session-open'), cleanupText)
 check('the fresh Session is not listed', !cleanupText.includes('session-blank-fresh'), cleanupText)
+check('a Session with no durable metadata is not listed', !cleanupText.includes('session-unproven'), cleanupText)
 check('no copy key is missing', !cleanupText.includes('!'), cleanupText)
 const cleanupConfirm = handlerFor(cleanupTree, /删除 1 个/)
 check('the confirm button carries the count', cleanupConfirm !== undefined, JSON.stringify(inspect(cleanupTree).handlers.map((entry) => entry.label)))

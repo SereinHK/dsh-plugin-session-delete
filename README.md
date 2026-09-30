@@ -20,6 +20,8 @@ plugin exists for the other case — when you want the bytes gone — and keeps 
 decision (what may be removed, what must be refused) in the plugin rather than in a storage
 layer.
 
+![The delete row at the end of a Session's "..." menu](docs/screenshot-menu.png)
+
 > **Before you install: it deletes, and there is no undo.** One run removes the whole
 > Session directory under the sessions root — **every format generation** of its log — plus
 > its projection-cache record. A Session that is live in the process is refused
@@ -27,6 +29,8 @@ layer.
 > running, and anything with activity inside a one-hour grace window. Attachments, exported
 > files and workspace files are never touched. If you want a recoverable action, use DSH's
 > archive instead.
+
+![The confirmation names the conversation and what is removed](docs/screenshot-delete-dialog.png)
 
 ## Install
 
@@ -174,9 +178,9 @@ The repository root **is** the package, so that a git install resolves its manif
 
 ```sh
 node tools/build.mjs            # src/ -> lib/  (also: node tools/build.mjs --check)
-node --test "tests/*.test.ts"   # 21 tests: host route, cleanup plan, dictionaries
+node --test "tests/*.test.ts"   # 24 tests: host route, cleanup plan, dictionaries
 node tools/verify-artifact.mjs  # 39 host-route checks against the built bytes
-node tools/verify-browser.mjs   # 42 render/interaction checks, refusals included
+node tools/verify-browser.mjs   # 43 render/interaction checks, refusals included
 node tools/verify-bundle.mjs    # is the package installable, and installed coherently?
 node tools/verify-boot.mjs --scan   # which running instance carries the row
 node tools/demo-home.mjs            # an isolated home (own DSH_HOME) with blank

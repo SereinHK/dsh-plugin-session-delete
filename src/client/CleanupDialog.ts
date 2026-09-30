@@ -157,7 +157,15 @@ async function runCleanup(
  */
 function describeRun(plan: CleanupPlan, run: RunState, t: Translate): string {
   if (run.phase === 'confirm') {
-    if (plan.targets.length === 0) return t('cleanup.none')
+    if (plan.targets.length === 0) {
+      // "Nothing to clean" is worth qualifying when the reason is that blankness
+      // could not be proven yet — otherwise the operator reads it as "there is
+      // nothing there", which is what a projection-less snapshot looks like.
+      const none = t('cleanup.none')
+      return plan.unprovenSkipped > 0
+        ? `${none}\n${t('cleanup.unproven', { n: plan.unprovenSkipped })}`
+        : none
+    }
     return t('cleanup.desc', { n: plan.targets.length })
   }
   if (run.phase === 'running') return t('cleanup.running', { done: run.attempted, total: plan.targets.length })

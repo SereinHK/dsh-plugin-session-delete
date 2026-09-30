@@ -42,10 +42,19 @@ export interface CleanupPlan {
   readonly runningSkipped: number
   /** Skipped: its activity is inside the grace period. */
   readonly freshSkipped: number
+  /** Skipped: no durable projection proving it never started a turn. */
+  readonly unprovenSkipped: number
 }
 
 /**
  * Decide which blank Sessions a cleanup run may remove.
+ *
+ * Blankness is read from the **durable** projection (`sessionListMetadata`, derived
+ * from the stored events), never from the live `blank` flag on the row. That flag
+ * describes a Session resident in this process — for one loaded from disk it says
+ * nothing, and a first attempt at this feature deleted nothing at all because of
+ * exactly that: every stored Session looked non-blank. A Session whose durable
+ * metadata has not arrived yet is skipped rather than guessed at.
  *
  * @param list - the client Session-list snapshot.
  * @param now - the clock to measure the grace period against.
@@ -62,32 +71,41 @@ export function planBlankCleanup(
   let currentSkipped = 0
   let runningSkipped = 0
   let freshSkipped = 0
+  let unprovenSkipped = 0
 
   for (const sessionId of list.ids) {
     const summary: SessionSummaryLike | undefined = list.byId[sessionId]
-    if (summary === undefined || !summary.blank) continue
+    if (summary === undefined) continue
+    const metadata = summary.projectionValues?.sessionListMetadata
+    if (metadata?.blank !== true) {
+      unprovenSkipped++
+      continue
+    }
     considered++
     if (sessionId === list.current) {
       currentSkipped++
       continue
     }
-    if (summary.running) {
+    if (summary.running === true) {
       runningSkipped++
       continue
     }
-    if (now - summary.updatedAt < graceMs) {
+    // The store already folds `lastPromptAt` into `updatedAt`; keep the durable
+    // timestamp as a floor so a stale row cannot look older than it is.
+    const updatedAt = Math.max(summary.updatedAt ?? 0, metadata.lastPromptAt ?? 0)
+    if (now - updatedAt < graceMs) {
       freshSkipped++
       continue
     }
     targets.push({
       sessionId,
-      updatedAt: summary.updatedAt,
+      updatedAt,
       ...summary.cwd === undefined ? {} : { cwd: summary.cwd }
     })
   }
 
   targets.sort((left, right) => left.updatedAt - right.updatedAt)
-  return { targets, considered, currentSkipped, runningSkipped, freshSkipped }
+  return { targets, considered, currentSkipped, runningSkipped, freshSkipped, unprovenSkipped }
 }
 
 /**
