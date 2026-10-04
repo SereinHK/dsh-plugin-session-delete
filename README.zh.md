@@ -143,8 +143,8 @@ dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-sessio
 仓库用 `pnpm run bundle`（tsdown）构建。本工作区没有工具链，所以同一份 `lib/` 由
 `tools/build.mjs` 从这些源码生成（用 Node 自带的类型剥离），并把 `src/client/*` 模块图
 拼成 Host 原样提供的 `window.__ModuleLoader__.load({ id, factory })` 脚本。
-两份产物随后由 `tools/verify-artifact.mjs`（对构建产物跑 59 项路由断言）、`tools/verify-browser.mjs`
-（47 项渲染与交互断言，含拒绝路径）和
+两份产物随后由 `tools/verify-artifact.mjs`（对构建产物跑 66 项路由断言）、`tools/verify-browser.mjs`
+（48 项渲染与交互断言，含拒绝路径）和
 `tools/verify-boot.mjs`（读取运行中应用的浏览器插件图）验证。
 
 ```sh

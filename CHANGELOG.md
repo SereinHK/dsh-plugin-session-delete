@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.3
+
+The cleanup shows what it is about to remove, and the plugin can now check its own
+assumptions against the runtime that is installed.
+
+- The durable-facts route reports each Session's **title** (from the same projection
+  cache the Session list reads) and the **bytes** it occupies, so the dialog names
+  conversations the way the operator recognises them and says what the run reclaims,
+  instead of listing bare workspace paths.
+- **New: `tools/verify-runtime-contract.mjs`.** The plugin reads a layout it does not
+  own — the JSONL backend's directory naming and the Host's projection record. Run this
+  after upgrading DSH: it decodes real logs and real records and reports, per
+  assumption, whether it still holds. On this machine: 8/8, including `projectKey`
+  reproducing the backend's own project directories across 16 real Sessions.
+- The delete path resolves both the session root and its target and refuses a target
+  that resolves outside the root, so a linked project directory cannot redirect a
+  recursive removal (string containment alone cannot see through a link).
+- Suites: 28 package tests, 66 host-route checks against the built bytes (a linked
+  directory refused, title/size reporting, and the earlier proven/unproven cases),
+  48 render and interaction checks.
+
 ## 0.1.2
 
 The blank-Session cleanup works, by asking the Host instead of guessing.

@@ -88,7 +88,8 @@ dsh-plugin-session-delete`. From a source checkout, `node install.mjs --uninstal
   every Session's `...` menu, after the shipped pin/rename/fork/archive rows.
 - `sidebar.footer.action` — **“Clean up empty conversations”** beside Settings:
   removes blank Sessions (`blank: true`, i.e. never started a turn) in one run.
-- `shell.overlay` — the two confirmations, each listing exactly what will go.
+- `shell.overlay` — the two confirmations, each listing exactly what will go: the
+  cleanup names every Session by its title (or path) and says what it reclaims.
 - The node half registers two routes inside Connection's
   authenticated `/api` fence: `POST /api/session.delete` for one removal, and
   `POST /api/session.unused`, which reports the durable per-Session facts (is the
@@ -200,6 +201,8 @@ node --test "tests/*.test.ts"   # 26 tests: host route, cleanup plan, dictionari
 node tools/verify-artifact.mjs  # 59 host-route checks against the built bytes
 node tools/verify-browser.mjs   # 47 render/interaction checks, refusals included
 node tools/verify-bundle.mjs    # is the package installable, and installed coherently?
+node tools/verify-runtime-contract.mjs   # do this plugin's assumptions about the
+                                    # installed runtime still hold? (run after a DSH upgrade)
 node tools/verify-boot.mjs --scan   # which running instance carries the row
 node tools/demo-home.mjs            # an isolated home (own DSH_HOME) with blank
                                     # Sessions, for screenshots or a safe review

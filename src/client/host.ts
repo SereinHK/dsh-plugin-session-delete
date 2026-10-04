@@ -25,6 +25,10 @@ export interface DeleteReport {
 export interface UnusedSessionRow {
   readonly sessionId: string
   readonly cwd: string
+  /** The Session's title from the Host's projection, when it has one. */
+  readonly title?: string | undefined
+  /** Bytes this Session occupies, when the Host could measure them. */
+  readonly bytes?: number | undefined
   readonly createdAt: number | null
   readonly updatedAt: number
   /** True only when the Host's durable projection says the log holds no accepted prompt. */

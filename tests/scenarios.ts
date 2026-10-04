@@ -8,7 +8,7 @@
  *
  * @module @deepseek-ai/dsh-client-ui-session-delete/tests/scenarios
  */
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { encodeSegment, projectKey, SESSION_DELETE_PATH, SESSION_UNUSED_PATH } from '../src/index.ts'
@@ -48,6 +48,8 @@ export interface MountOptions {
   readonly blank?: Readonly<Record<string, boolean>>
   /** A cache whose reads throw, to prove a failure can never become a deletion. */
   readonly cacheThrows?: boolean
+  /** Titles the projection carries, per id. */
+  readonly titles?: Readonly<Record<string, string>>
 }
 
 /** Collects checks for one section without aborting on the first failure. */
@@ -147,7 +149,13 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
           cachedSnapshot: (header: { id: string }) => {
             const projected = options.projected ?? 'all'
             if (projected === 'none' || (projected !== 'all' && !projected.includes(header.id))) return undefined
-            return { values: { sessionListMetadata: { blank: options.blank?.[header.id] ?? true, lastPromptAt: null } } }
+            return {
+              values: {
+                sessionListMetadata: { blank: options.blank?.[header.id] ?? true, lastPromptAt: null },
+                // The same block carries the title the cleanup now shows.
+                title: options.titles?.[header.id] ?? null
+              }
+            }
           }
         }
       },
@@ -239,6 +247,53 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
 
     const empty = mount({})
     section.check('a Host with no stored Sessions answers an empty list', (await call(empty, {}, SESSION_UNUSED_PATH)).payload?.value?.sessions?.length === 0)
+    results.push(section.result())
+  }
+
+  // ── what the cleanup shows about each candidate ──────────────────────────────
+  {
+    const section = new Section('title and size')
+    const id = 'session-ffffffff-1111-2222-3333-444444444444'
+    const directory = await seed(id)
+    const unknown = 'session-ffffffff-1111-2222-3333-555555555555'
+    const titled = mount({ [id]: { cwd } }, { titles: { [id]: '演示对话' } })
+    const row = (await call(titled, {}, SESSION_UNUSED_PATH)).payload?.value?.sessions?.[0]
+    section.check('reports the projected title', row?.title === '演示对话', JSON.stringify(row))
+    const written = (await stat(join(directory, 'session.v4.jsonl.zstd'))).size
+    section.check('reports what the Session occupies', row?.bytes === written, `${String(row?.bytes)} vs ${String(written)}`)
+    section.check('omits the title when the projection has none',
+      (await call(mount({ [unknown]: { cwd } }), {}, SESSION_UNUSED_PATH)).payload?.value?.sessions?.[0]?.title === undefined)
+    const unmeasurable = mount({ 'session-ffffffff-1111-2222-3333-666666666666': { cwd } })
+    section.check('omits the size when nothing is on disk',
+      (await call(unmeasurable, {}, SESSION_UNUSED_PATH)).payload?.value?.sessions?.[0]?.bytes === undefined)
+    results.push(section.result())
+  }
+
+  // ── a linked project directory is refused ────────────────────────────────────
+  {
+    const section = new Section('linked project directory')
+    const outside = join(home, 'outside')
+    const id = 'session-99999999-1111-2222-3333-444444444444'
+    await mkdir(join(outside, id), { recursive: true })
+    await writeFile(join(outside, id, 'session.v4.jsonl.zstd'), 'session log fixture')
+    const linked = join(root, projectKey('C:\\linked'))
+    let madeLink = false
+    try {
+      // A junction needs no elevation on Windows, unlike a symbolic link.
+      await symlink(outside, linked, 'junction')
+      madeLink = true
+    } catch {
+      madeLink = false
+    }
+    if (!madeLink) {
+      section.check('junction fixture could not be created on this platform; check skipped', true)
+    } else {
+      const stub = mount({ [id]: { cwd: 'C:\\linked' } })
+      const { status, payload } = await call(stub, { sessionId: id })
+      section.check('refuses a directory that resolves outside the root', status === 500 && payload?.error?.code === 'unsafe-target', JSON.stringify(payload))
+      section.check('and leaves the files alone', await exists(join(outside, id, 'session.v4.jsonl.zstd')))
+      section.check('naming the real path it refused', String(payload?.error?.message).includes('outside the session root'), String(payload?.error?.message))
+    }
     results.push(section.result())
   }
 

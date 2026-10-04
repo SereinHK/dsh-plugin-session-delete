@@ -221,15 +221,45 @@ function renderPlan(plan: CleanupPlan, openedAt: number, t: Translate): React.Re
       key: target.sessionId,
       style: { display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '13px' }
     }, [
+      // The title is what the operator recognises the conversation by; the path is
+      // the fallback for one that never got a title. The size says what the run is
+      // actually reclaiming.
       React.createElement('span', {
-        key: 'path',
+        key: 'name',
         style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-        children: target.cwd ?? target.sessionId
+        title: target.cwd,
+        children: target.title ?? target.cwd ?? target.sessionId
       }),
-      React.createElement('span', { key: 'age', children: describeAge(target.updatedAt, openedAt, t) })
+      React.createElement('span', {
+        key: 'meta',
+        style: { whiteSpace: 'nowrap', opacity: 0.75 },
+        children: [formatBytes(target.bytes), describeAge(target.updatedAt, openedAt, t)].filter(Boolean).join(' · ')
+      })
     ]))),
     hidden > 0 && React.createElement('p', { key: 'more', children: t('cleanup.more', { n: hidden }) })
   ]
+}
+
+/**
+ * Word a byte count for the operator, or nothing when it is unknown.
+ *
+ * Decimal units, one fraction digit: this exists to answer "roughly how much am I
+ * reclaiming", and a fake precision would mislead.
+ *
+ * @param bytes - the measured size, when the Host could measure it.
+ * @returns display text such as `12.4 MB`, or an empty string.
+ */
+function formatBytes(bytes: number | undefined): string {
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return ''
+  if (bytes < 1000) return `${String(Math.round(bytes))} B`
+  const units = ['kB', 'MB', 'GB', 'TB']
+  let value = bytes / 1000
+  let unit = 0
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000
+    unit++
+  }
+  return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[unit] ?? 'TB'}`
 }
 
 /**

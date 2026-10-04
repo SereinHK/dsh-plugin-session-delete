@@ -365,7 +365,7 @@ list = {
 }
 unusedFacts = [
   fact('session-open'),
-  fact('session-blank-old', { cwd: 'C:\\work\\alpha' }),
+  fact('session-blank-old', { cwd: 'C:\\work\\alpha', title: '演示对话', bytes: 12_400 }),
   fact('session-blank-fresh', { updatedAt: Date.now() - 60_000 }),
   fact('session-used', { blank: false, lastPromptAt: Date.now() - 5 * 60 * 60 * 1000 }),
   fact('session-running'),
@@ -395,7 +395,8 @@ const cleanupDialog = pendingDialog
 const cleanupTree = renderCleanupDialog()
 const cleanupText = inspect(cleanupTree).text.join(' ')
 check('the dialog promises exactly the one eligible Session', cleanupText.includes('有 1 个从未使用过的空会话'), cleanupText)
-check('it lists the workspace path of what will go', cleanupText.includes('C:\\work\\alpha'), cleanupText)
+check('it names the conversation by its title', cleanupText.includes('演示对话'), cleanupText)
+check('it says what the run reclaims', cleanupText.includes('12.4 kB'), cleanupText)
 check('it explains the grace period', cleanupText.includes('60 分钟'), cleanupText)
 check('the open Session is not listed', !cleanupText.includes('session-open'), cleanupText)
 check('the fresh Session is not listed', !cleanupText.includes('session-blank-fresh'), cleanupText)

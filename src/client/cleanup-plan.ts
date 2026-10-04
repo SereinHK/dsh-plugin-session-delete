@@ -29,6 +29,10 @@ export interface CleanupTarget {
   readonly sessionId: string
   readonly updatedAt: number
   readonly cwd?: string | undefined
+  /** The Session's title, when the Host's projection had one. */
+  readonly title?: string | undefined
+  /** What it occupies on disk, when the Host could measure it. */
+  readonly bytes?: number | undefined
 }
 
 /** What one cleanup run would do, and why each blank Session was passed over. */
@@ -103,7 +107,13 @@ export function planBlankCleanup(
       freshSkipped++
       continue
     }
-    targets.push({ sessionId: fact.sessionId, updatedAt, cwd: fact.cwd })
+    targets.push({
+      sessionId: fact.sessionId,
+      updatedAt,
+      ...fact.cwd === undefined ? {} : { cwd: fact.cwd },
+      ...fact.title === undefined ? {} : { title: fact.title },
+      ...fact.bytes === undefined ? {} : { bytes: fact.bytes }
+    })
   }
 
   targets.sort((left, right) => left.updatedAt - right.updatedAt)

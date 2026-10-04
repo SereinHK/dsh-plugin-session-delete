@@ -21,7 +21,7 @@
  *
  * @module @deepseek-ai/dsh-client-ui-session-delete
  */
-import { readdir, rm, stat } from 'node:fs/promises'
+import { readdir, realpath, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
 
@@ -112,6 +112,10 @@ interface SessionProjectionCacheLike {
 export interface UnusedSessionRow {
   readonly sessionId: string
   readonly cwd: string
+  /** The Session's title from the same projection cache, when it has one. */
+  readonly title?: string | undefined
+  /** Bytes this Session occupies on disk, when they could be measured. */
+  readonly bytes?: number | undefined
   /** Header creation time, or null when the log does not carry one. */
   readonly createdAt: number | null
   /** Last activity: the header's creation time, floored by the last accepted prompt. */
@@ -200,25 +204,32 @@ async function handleSessionUnused(ctx: HostContext, request: Request): Promise<
   }
 
   const cache = ctx.get('sessionProjectionCache') as SessionProjectionCacheLike | undefined
+  const root = sessionRoot(ctx)
   const sessions: UnusedSessionRow[] = []
   for (const record of records.slice(0, MAX_UNUSED_ROWS)) {
     const header = record.header
     if (header.cwd === undefined || header.cwd.length === 0) continue
-    let metadata: { readonly blank?: unknown; readonly lastPromptAt?: unknown } | undefined
+    // Both rows come from the same cache block the Session list itself reads: the
+    // title is what the operator recognises the conversation by, and the size is
+    // what the cleanup is actually reclaiming.
+    let values: Readonly<Record<string, unknown>> | undefined
     try {
-      metadata = cache?.cachedSnapshot(header, ['sessionListMetadata'])?.values.sessionListMetadata as
-        | { readonly blank?: unknown; readonly lastPromptAt?: unknown }
-        | undefined
+      values = cache?.cachedSnapshot(header, ['sessionListMetadata', 'title'])?.values
     } catch {
       // A cache that cannot answer is "unproven", never an error: the caller's
       // policy must not be talked into a deletion by a failure.
-      metadata = undefined
+      values = undefined
     }
+    const metadata = values?.sessionListMetadata as { readonly blank?: unknown; readonly lastPromptAt?: unknown } | undefined
+    const title = typeof values?.title === 'string' && values.title.trim() !== '' ? values.title : undefined
+    const bytes = await sessionBytes(root, header.cwd, header.id)
     const lastPromptAt = typeof metadata?.lastPromptAt === 'number' ? metadata.lastPromptAt : null
     const createdAt = typeof header.createdAt === 'number' ? header.createdAt : null
     sessions.push({
       sessionId: header.id,
       cwd: header.cwd,
+      ...title === undefined ? {} : { title },
+      ...bytes === undefined ? {} : { bytes },
       createdAt,
       updatedAt: Math.max(createdAt ?? 0, lastPromptAt ?? 0),
       blank: metadata?.blank === true,
@@ -228,6 +239,33 @@ async function handleSessionUnused(ctx: HostContext, request: Request): Promise<
   }
 
   return Response.json({ ok: true, value: { sessions } }, { headers: { 'cache-control': 'no-store' } })
+}
+
+/**
+ * Measure one stored Session's directory, so the cleanup can say what it reclaims.
+ *
+ * Best-effort by design: a Session that cannot be measured is still reported, just
+ * without a size. Nothing here decides anything — the policy never reads this.
+ *
+ * @param root - the configured session root.
+ * @param cwd - the Session's workspace path, which picks its project directory.
+ * @param sessionId - the Session id.
+ * @returns the total bytes of its artifacts, or `undefined` when unreadable.
+ */
+async function sessionBytes(root: string, cwd: string, sessionId: string): Promise<number | undefined> {
+  try {
+    const directory = resolve(root, projectKey(cwd), encodeSegment(sessionId))
+    if (containmentRefusal(root, directory, encodeSegment(sessionId)) !== undefined) return undefined
+    const entries = await readdir(directory, { withFileTypes: true })
+    let total = 0
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      total += (await stat(join(directory, entry.name))).size
+    }
+    return total
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -278,6 +316,8 @@ async function handleSessionDelete(ctx: HostContext, request: Request): Promise<
   // refusal, never a deletion somewhere else.
   const refusal = containmentRefusal(root, directory, encodeSegment(sessionId))
   if (refusal !== undefined) return failure('unsafe-target', refusal, 500)
+  const realRefusal = await realContainmentRefusal(root, directory)
+  if (realRefusal !== undefined) return failure('unsafe-target', realRefusal, 500)
 
   let files: readonly string[]
   try {
@@ -395,6 +435,36 @@ function containmentRefusal(root: string, directory: string, encoded: string): s
   if (!target.startsWith(`${rootPath}${sep}`)) return `refusing to remove "${target}": it is outside the session root`
   const relative = target.slice(rootPath.length + 1)
   if (relative.split(sep).length !== 2) return `refusing to remove "${target}": it is not one project directory below the session root`
+  return undefined
+}
+
+/**
+ * Decide the same question again, on resolved paths.
+ *
+ * {@link containmentRefusal} compares strings, so a project directory that is a
+ * link — a junction into another drive, or something a user created — passes it
+ * while the recursive removal would actually happen wherever the link points. The
+ * blast radius is already bounded (the directory must be named exactly after the
+ * Session id), so this is hardening rather than a fix; resolving both sides costs
+ * one syscall each and removes the doubt. A root that is itself a link is fine:
+ * both sides resolve through it.
+ *
+ * @param root - the configured session root.
+ * @param directory - the located session directory.
+ * @returns a refusal message, or `undefined` when the real target is contained.
+ */
+async function realContainmentRefusal(root: string, directory: string): Promise<string | undefined> {
+  let realRoot: string
+  let realDirectory: string
+  try {
+    realRoot = await realpath(root)
+    realDirectory = await realpath(directory)
+  } catch (error) {
+    return `refusing to remove "${directory}": its real path could not be resolved (${messageOf(error)})`
+  }
+  if (!realDirectory.startsWith(`${realRoot}${sep}`)) {
+    return `refusing to remove "${directory}": it resolves outside the session root, to "${realDirectory}"`
+  }
   return undefined
 }
 
