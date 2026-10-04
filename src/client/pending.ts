@@ -10,8 +10,8 @@
  * @module @deepseek-ai/dsh-client-ui-session-delete/client/pending
  */
 import * as React from 'react'
-import { listUnusedSessions } from './host'
-import type { UnusedSessionRow } from './host'
+import { listTrash, listUnusedSessions } from './host'
+import type { TrashEntry, UnusedSessionRow } from './host'
 
 /** One conversation's removal request, opened from its row menu. */
 export interface DeleteRequest {
@@ -37,8 +37,26 @@ export interface CleanupRequest {
   readonly loadError?: unknown
 }
 
+/**
+ * A trash request, opened from the sidebar foot.
+ *
+ * Like the cleanup, it reads the Host first: what is restorable is the Host's
+ * answer, and the dialog shows what it is waiting for until it arrives.
+ */
+export interface TrashRequest {
+  readonly kind: 'trash'
+  /** True while the Host's listing is in flight. */
+  readonly loading: boolean
+  /** The entries once they arrive. */
+  readonly entries?: readonly TrashEntry[] | undefined
+  /** The Host's retention window, for the dialog's copy. */
+  readonly retentionDays?: number | undefined
+  /** Why the load failed, worded for the operator by the dialog. */
+  readonly loadError?: unknown
+}
+
 /** Either pending request. */
-export type PendingRequest = DeleteRequest | CleanupRequest
+export type PendingRequest = DeleteRequest | CleanupRequest | TrashRequest
 
 let pending: PendingRequest | null = null
 const listeners = new Set<() => void>()
@@ -95,6 +113,53 @@ export function requestCleanup(): void {
     (error: unknown) => {
       if (pending === null || pending.kind !== 'cleanup') return
       pending = { kind: 'cleanup', loading: false, loadError: error }
+      publish()
+    }
+  )
+}
+
+/**
+ * Open the trash.
+ *
+ * The listing comes from the Host (it expires what has aged out before answering),
+ * so the dialog waits for it the same way the cleanup does, and a failure is carried
+ * rather than shown as an empty trash — "nothing to restore" and "we could not ask"
+ * are very different things to tell someone who just deleted a conversation.
+ */
+export function requestTrash(): void {
+  pending = { kind: 'trash', loading: true }
+  publish()
+  void listTrash().then(
+    (listing) => {
+      if (pending === null || pending.kind !== 'trash') return
+      pending = { kind: 'trash', loading: false, entries: listing.entries, retentionDays: listing.retentionDays }
+      publish()
+    },
+    (error: unknown) => {
+      if (pending === null || pending.kind !== 'trash') return
+      pending = { kind: 'trash', loading: false, loadError: error }
+      publish()
+    }
+  )
+}
+
+/**
+ * Re-read the trash into an open request, after a restore or a purge changed it.
+ * @param current - the request the dialog is showing.
+ */
+export function refreshTrash(current: TrashRequest): void {
+  if (pending === null || pending.kind !== 'trash') return
+  pending = { kind: 'trash', loading: true, entries: current.entries, retentionDays: current.retentionDays }
+  publish()
+  void listTrash().then(
+    (listing) => {
+      if (pending === null || pending.kind !== 'trash') return
+      pending = { kind: 'trash', loading: false, entries: listing.entries, retentionDays: listing.retentionDays }
+      publish()
+    },
+    (error: unknown) => {
+      if (pending === null || pending.kind !== 'trash') return
+      pending = { kind: 'trash', loading: false, loadError: error }
       publish()
     }
   )

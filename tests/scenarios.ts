@@ -8,10 +8,18 @@
  *
  * @module @deepseek-ai/dsh-client-ui-session-delete/tests/scenarios
  */
-import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { encodeSegment, projectKey, SESSION_DELETE_PATH, SESSION_UNUSED_PATH } from '../src/index.ts'
+import { dirname, join } from 'node:path'
+import {
+  encodeSegment,
+  projectKey,
+  SESSION_DELETE_PATH,
+  SESSION_PURGE_PATH,
+  SESSION_RESTORE_PATH,
+  SESSION_TRASH_PATH,
+  SESSION_UNUSED_PATH
+} from '../src/index.ts'
 
 /** One section of the run: a label, how many checks it made, and what failed. */
 export interface SectionResult {
@@ -35,6 +43,8 @@ export interface HostStub {
     readonly requestBody: string
     readonly fetch: (request: Request) => Promise<Response>
   }
+  /** Every registered route, by path — the trash routes included. */
+  readonly byPath: Readonly<Record<string, HostStub['route']>>
   readonly events: readonly (readonly [string, unknown])[]
   readonly root: string
   readonly cacheDir: string
@@ -50,6 +60,8 @@ export interface MountOptions {
   readonly cacheThrows?: boolean
   /** Titles the projection carries, per id. */
   readonly titles?: Readonly<Record<string, string>>
+  /** Plugin config: how long the trash keeps things. */
+  readonly retentionDays?: number
 }
 
 /** Collects checks for one section without aborting on the first failure. */
@@ -162,18 +174,27 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
       emit: (event: string, ...args: unknown[]) => {
         events.push([event, args[0]])
       }
-    })
-    return { route: routes[0]!, unused: routes[1]!, events, root, cacheDir }
+    }, options.retentionDays === undefined ? undefined : { retentionDays: options.retentionDays })
+    return {
+      route: routes[0]!,
+      unused: routes[1]!,
+      byPath: Object.fromEntries(routes.map((route) => [route.path, route])),
+      events,
+      root,
+      cacheDir
+    }
   }
 
   /** Issue one request against a registered route. */
   const call = async (stub: HostStub, body: unknown, path: string = SESSION_DELETE_PATH): Promise<{ status: number; payload: any }> => {
+    const route = stub.byPath[path]
+    if (route === undefined) throw new Error(`no route registered at ${path}; registered: ${Object.keys(stub.byPath).join(', ')}`)
     const request = new Request(`http://127.0.0.1:19387${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: typeof body === 'string' ? body : JSON.stringify(body)
     })
-    const response = await (path === SESSION_DELETE_PATH ? stub.route.fetch(request) : stub.unused.fetch(request))
+    const response = await route.fetch(request)
     let payload: unknown = null
     try {
       payload = await response.json()
@@ -294,6 +315,80 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
       section.check('and leaves the files alone', await exists(join(outside, id, 'session.v4.jsonl.zstd')))
       section.check('naming the real path it refused', String(payload?.error?.message).includes('outside the session root'), String(payload?.error?.message))
     }
+    results.push(section.result())
+  }
+
+  // ── the trash ────────────────────────────────────────────────────────────────
+  // The trash lives beside the sessions root (so a move is a rename on one volume),
+  // and the fixture derives it the same way the plugin does: if that layout changes,
+  // these checks fail, which is the point — it is this plugin's own contract.
+  const trashBase = join(dirname(root), 'plugin-session-delete', 'trash', 'entries')
+  {
+    const section = new Section('trash: move, list, restore, purge')
+    const id = 'session-77777777-1111-2222-3333-444444444444'
+    const directory = await seed(id)
+    const stub = mount({ [id]: { cwd } })
+
+    const deleted = await call(stub, { sessionId: id })
+    section.check('a delete answers 200', deleted.status === 200, JSON.stringify(deleted.payload))
+    section.check('the Session left the sessions root', !(await exists(directory)))
+    section.check('the response says where it went', deleted.payload?.value?.trashEntry?.sessionId === id, JSON.stringify(deleted.payload?.value?.trashEntry))
+    const moved = join(trashBase, encodeSegment(id))
+    section.check('its files are in the trash, not destroyed', await exists(join(moved, 'session.v4.jsonl.zstd')))
+    section.check('the response lists the files it moved', deleted.payload?.value?.files?.includes('session.v4.jsonl.zstd') === true)
+
+    const listed = await call(stub, {}, SESSION_TRASH_PATH)
+    const entry = listed.payload?.value?.entries?.[0]
+    section.check('the trash lists the entry', listed.payload?.value?.entries?.length === 1, JSON.stringify(listed.payload))
+    section.check('with its workspace', entry?.cwd === cwd, JSON.stringify(entry))
+    section.check('with its size', typeof entry?.bytes === 'number' && entry.bytes > 0, JSON.stringify(entry))
+    section.check('and with the default window', listed.payload?.value?.retentionDays === 7, String(listed.payload?.value?.retentionDays))
+
+    const restored = await call(stub, { sessionId: id }, SESSION_RESTORE_PATH)
+    section.check('a restore answers 200', restored.status === 200, JSON.stringify(restored.payload))
+    section.check('the Session is back where it was', await exists(join(directory, 'session.v4.jsonl.zstd')))
+    section.check('and the trash is empty again', (await call(stub, {}, SESSION_TRASH_PATH)).payload?.value?.entries?.length === 0)
+
+    await call(stub, { sessionId: id })
+    const purged = await call(stub, { sessionId: id }, SESSION_PURGE_PATH)
+    section.check('a purge answers 200', purged.status === 200, JSON.stringify(purged.payload))
+    section.check('and the trashed files are gone for good', !(await exists(moved)))
+    const gone = await call(stub, { sessionId: id }, SESSION_PURGE_PATH)
+    section.check('purging it again is a 404', gone.status === 404 && gone.payload?.error?.code === 'trash-entry-not-found', JSON.stringify(gone.payload))
+    section.check('an invalid id is refused before any lookup',
+      (await call(stub, { sessionId: '../etc' }, SESSION_PURGE_PATH)).status === 400)
+    results.push(section.result())
+  }
+
+  // ── the trash: window and emptying ───────────────────────────────────────────
+  {
+    const section = new Section('trash: expiry and emptying')
+    const id = 'session-88888888-1111-2222-3333-444444444444'
+    await seed(id)
+    const stub = mount({ [id]: { cwd } })
+    await call(stub, { sessionId: id })
+
+    // Age the record past the window rather than waiting a week for it.
+    const recordPath = join(trashBase, `${encodeSegment(id)}.json`)
+    const record = JSON.parse(await readFile(recordPath, 'utf8'))
+    record.deletedAt = Date.now() - 8 * 24 * 60 * 60 * 1000
+    await writeFile(recordPath, JSON.stringify(record), 'utf8')
+    const listed = await call(stub, {}, SESSION_TRASH_PATH)
+    section.check('an entry past its window is gone by the time it is listed', listed.payload?.value?.entries?.length === 0, JSON.stringify(listed.payload))
+    section.check('and its files were destroyed, not just hidden', !(await exists(join(trashBase, encodeSegment(id)))))
+
+    const shortId = 'session-88888888-1111-2222-3333-555555555555'
+    await seed(shortId)
+    const oneDay = mount({ [shortId]: { cwd } }, { retentionDays: 1 })
+    await call(oneDay, { sessionId: shortId })
+    section.check('a configured window is reported', (await call(oneDay, {}, SESSION_TRASH_PATH)).payload?.value?.retentionDays === 1)
+
+    const otherId = 'session-88888888-1111-2222-3333-666666666666'
+    await seed(otherId)
+    await call(oneDay, { sessionId: otherId })
+    const emptied = await call(oneDay, { all: true }, SESSION_PURGE_PATH)
+    section.check('emptying the trash reports what it destroyed', (emptied.payload?.value?.purged?.length ?? 0) >= 2, JSON.stringify(emptied.payload))
+    section.check('and leaves nothing behind', (await call(oneDay, {}, SESSION_TRASH_PATH)).payload?.value?.entries?.length === 0)
     results.push(section.result())
   }
 

@@ -240,27 +240,6 @@ function renderPlan(plan: CleanupPlan, openedAt: number, t: Translate): React.Re
   ]
 }
 
-/**
- * Word a byte count for the operator, or nothing when it is unknown.
- *
- * Decimal units, one fraction digit: this exists to answer "roughly how much am I
- * reclaiming", and a fake precision would mislead.
- *
- * @param bytes - the measured size, when the Host could measure it.
- * @returns display text such as `12.4 MB`, or an empty string.
- */
-function formatBytes(bytes: number | undefined): string {
-  if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return ''
-  if (bytes < 1000) return `${String(Math.round(bytes))} B`
-  const units = ['kB', 'MB', 'GB', 'TB']
-  let value = bytes / 1000
-  let unit = 0
-  while (value >= 1000 && unit < units.length - 1) {
-    value /= 1000
-    unit++
-  }
-  return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[unit] ?? 'TB'}`
-}
 
 /**
  * Render the running or finished body: the outcome already reads in the

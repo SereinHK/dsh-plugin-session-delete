@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.0
+
+Removal is a move now: a deleted conversation goes into a trash beside the sessions
+root, where it can be put back until the retention window closes.
+
+- **The trash.** `POST /api/session.delete` renames the Session directory into
+  `<DSH_HOME>/plugin-session-delete/trash/` — beside the sessions root, so the move is a
+  rename on one volume and therefore atomic — and records its workspace, title, size and
+  when it was moved. Nothing is destroyed at that point.
+- **Restore and destroy.** `POST /api/session.trash` lists what is in there (purging
+  anything past its window before it answers, so the list is exactly what can still come
+  back), `POST /api/session.restore` puts one back where it came from — refusing rather
+  than overwriting if that name is taken — and `POST /api/session.purge` destroys one
+  entry or empties the trash.
+- **A window, not a countdown.** Seven days by default, configurable per profile
+  (`config: { retentionDays: n }` on this plugin's row). Expiry is lazy plus one sweep at
+  startup: nothing runs on a timer.
+- **Surfaces.** A "Trash" entry beside the cleanup action in the sidebar foot, and a
+  dialog listing each entry by title with its size and remaining days, with `Restore` and
+  `Delete for good` (which asks first).
+- The delete confirmation no longer promises permanence — it says what actually happens —
+  and its button reads "Move to trash".
+- Hardening found while testing this: a purge with no record behind it used to report
+  success (`rm` with `force` succeeds on a missing path); it is a 404 now.
+- Suites: 30 package tests, 87 host-route checks against the built bytes (moving,
+  listing, restoring, refusing a taken name, purging, expiry, a configured window,
+  emptying), 64 render and interaction checks.
+
 ## 0.1.3
 
 The cleanup shows what it is about to remove, and the plugin can now check its own

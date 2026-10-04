@@ -21,9 +21,9 @@
  *
  * @module @deepseek-ai/dsh-client-ui-session-delete
  */
-import { readdir, realpath, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join, resolve, sep } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 
 /** The exact Fetch route this plugin owns; inside Connection's authenticated `/api` prefix. */
 export const SESSION_DELETE_PATH = '/api/session.delete'
@@ -39,6 +39,21 @@ export const SESSION_DELETE_PATH = '/api/session.delete'
  * cache the Session list itself uses.
  */
 export const SESSION_UNUSED_PATH = '/api/session.unused'
+
+/** List the trash, newest first. Expired entries are purged before answering. */
+export const SESSION_TRASH_PATH = '/api/session.trash'
+
+/** Put one trashed Session back where it came from. */
+export const SESSION_RESTORE_PATH = '/api/session.restore'
+
+/** Destroy one trashed Session, or every one of them, for good. */
+export const SESSION_PURGE_PATH = '/api/session.purge'
+
+/** How long a trashed Session stays restorable unless the profile says otherwise. */
+const DEFAULT_RETENTION_DAYS = 7
+
+/** The directory this plugin owns, beside the sessions root (same volume: a rename is atomic). */
+const TRASH_OWNER_DIRECTORY = 'plugin-session-delete'
 
 /** Longest accepted session id, bounded before any filesystem or lookup work. */
 const MAX_SESSION_ID_LENGTH = 200
@@ -144,24 +159,58 @@ interface DeleteFailure {
   readonly message: string
 }
 
+/** One trashed Session, as this plugin reports it. */
+export interface TrashEntry {
+  readonly sessionId: string
+  /** The workspace the Session belonged to, so the row means something. */
+  readonly cwd: string
+  readonly title?: string | undefined
+  readonly bytes?: number | undefined
+  /** When it was moved here. */
+  readonly deletedAt: number
+  /** When the retention window ends and a purge may take it. */
+  readonly expiresAt: number
+  /** Files it still holds. */
+  readonly files: readonly string[]
+}
+
+/** The record this plugin keeps beside each trashed Session. */
+interface TrashRecord {
+  readonly sessionId: string
+  readonly cwd: string
+  readonly projectDirectory: string
+  readonly title?: string | undefined
+  readonly bytes?: number | undefined
+  readonly deletedAt: number
+  readonly files: readonly string[]
+}
+
+/** How this plugin is configured in a profile's patch row. */
+export interface SessionDeleteConfig {
+  /** Days a trashed Session stays restorable. */
+  readonly retentionDays?: number | undefined
+}
+
 /** One successful deletion's report. */
 interface DeleteReport {
   readonly sessionId: string
   readonly directory: string
   readonly files: readonly string[]
   readonly cacheRemoved: boolean
+  readonly trashEntry: TrashEntry
 }
 
 /**
  * Register this plugin's authenticated routes for its lifetime.
  * @param ctx - Host context carrying Connection, persistence, query, and live Sessions.
+ * @param config - optional plugin config: how long the trash keeps things.
  */
-export function apply(ctx: HostContext): void {
+export function apply(ctx: HostContext, config?: SessionDeleteConfig): void {
   ctx.effect(() => ctx.connection.fetch.register({
     path: SESSION_DELETE_PATH,
     methods: ['POST'],
     requestBody: 'buffered',
-    fetch: (request) => handleSessionDelete(ctx, request)
+    fetch: (request) => handleSessionDelete(ctx, config, request)
   }), `session-delete: POST ${SESSION_DELETE_PATH}`)
   ctx.effect(() => ctx.connection.fetch.register({
     path: SESSION_UNUSED_PATH,
@@ -169,6 +218,32 @@ export function apply(ctx: HostContext): void {
     requestBody: 'buffered',
     fetch: (request) => handleSessionUnused(ctx, request)
   }), `session-delete: POST ${SESSION_UNUSED_PATH}`)
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: SESSION_TRASH_PATH,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: (request) => handleTrashList(ctx, config, request)
+  }), `session-delete: POST ${SESSION_TRASH_PATH}`)
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: SESSION_RESTORE_PATH,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: (request) => handleSessionRestore(ctx, request)
+  }), `session-delete: POST ${SESSION_RESTORE_PATH}`)
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: SESSION_PURGE_PATH,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: (request) => handleSessionPurge(ctx, config, request)
+  }), `session-delete: POST ${SESSION_PURGE_PATH}`)
+
+  // Expiry is lazy (a list purges what has aged out), but a profile that has not
+  // opened the trash for a month should not accumulate one. Best-effort: a failure
+  // here must never stop the plugin from mounting.
+  ctx.effect(() => {
+    void expireTrash(ctx, retentionMs(config)).catch(() => {})
+    return () => {}
+  }, 'session-delete: expire the trash at startup')
 }
 
 /**
@@ -274,7 +349,7 @@ async function sessionBytes(root: string, cwd: string, sessionId: string): Promi
  * @param request - the authenticated Fetch request.
  * @returns a JSON envelope: `{ ok: true, value }` or `{ ok: false, error }`.
  */
-async function handleSessionDelete(ctx: HostContext, request: Request): Promise<Response> {
+async function handleSessionDelete(ctx: HostContext, config: SessionDeleteConfig | undefined, request: Request): Promise<Response> {
   let body: unknown
   try {
     body = await request.json()
@@ -310,21 +385,21 @@ async function handleSessionDelete(ctx: HostContext, request: Request): Promise<
     return failure('session-not-found', `no stored session log for "${sessionId}" under "${root}"`, 404)
   }
 
-  // Last line of defence before an irreversible recursive removal: the target
-  // must be exactly <root>/<project>/<encoded session id>. A layout drift, a
-  // crafted id, or a symlinked project directory can then only ever produce a
-  // refusal, never a deletion somewhere else.
+  // Containment before anything moves: the target must be exactly
+  // <root>/<project>/<encoded session id>. A layout drift, a crafted id, or a
+  // symlinked project directory can then only ever produce a refusal.
   const refusal = containmentRefusal(root, directory, encodeSegment(sessionId))
   if (refusal !== undefined) return failure('unsafe-target', refusal, 500)
   const realRefusal = await realContainmentRefusal(root, directory)
   if (realRefusal !== undefined) return failure('unsafe-target', realRefusal, 500)
 
-  let files: readonly string[]
-  try {
-    files = (await readdir(directory, { withFileTypes: true })).map((entry) => entry.name)
-    await rm(directory, { recursive: true, force: true })
-  } catch (error) {
-    return failure('delete-failed', `cannot remove "${directory}": ${messageOf(error)}`, 500)
+  // Removal is a MOVE, not an unlink: the Session is renamed into this plugin's
+  // trash, which lives beside the sessions root so the rename stays on one volume
+  // and therefore atomic. Nothing is destroyed here — `session.purge` is what
+  // destroys, and the retention window is what decides when.
+  const trashed = await moveToTrash(ctx, root, sessionId, directory, config)
+  if (trashed === undefined) {
+    return failure('delete-failed', `cannot move "${directory}" into the trash`, 500)
   }
 
   const cacheRemoved = await purgeProjectionRecord(ctx, sessionId)
@@ -335,8 +410,351 @@ async function handleSessionDelete(ctx: HostContext, request: Request): Promise<
   // plugin says it here.
   ctx.emit('api-session/removed', sessionId)
 
-  const report: DeleteReport = { sessionId, directory, files, cacheRemoved }
-  return Response.json({ ok: true, value: report }, { headers: { 'cache-control': 'no-store' } })
+  return Response.json({
+    ok: true,
+    value: {
+      sessionId,
+      directory,
+      files: trashed.files,
+      cacheRemoved,
+      // Where it went and when it stops being restorable.
+      trashEntry: trashed.entry
+    }
+  }, { headers: { 'cache-control': 'no-store' } })
+}
+
+/**
+ * The retention window in milliseconds.
+ * @param config - plugin config, when the profile set any.
+ * @returns the window, defaulting to a week.
+ */
+function retentionMs(config: SessionDeleteConfig | undefined): number {
+  const days = config?.retentionDays
+  const usable = typeof days === 'number' && Number.isFinite(days) && days > 0 ? days : DEFAULT_RETENTION_DAYS
+  return Math.round(usable * 24 * 60 * 60 * 1000)
+}
+
+/**
+ * This plugin's own directory for a profile: beside the sessions root, so a move
+ * into or out of it is a rename on one volume rather than a copy across volumes.
+ * @param root - the configured session root.
+ * @returns the trash directory.
+ */
+function trashRoot(root: string): string {
+  return join(dirname(root), TRASH_OWNER_DIRECTORY, 'trash')
+}
+
+/** Where one trashed Session's files live, and where its record lives. */
+function trashPaths(root: string, sessionId: string): { readonly directory: string; readonly record: string } {
+  const base = join(trashRoot(root), 'entries')
+  return { directory: join(base, encodeSegment(sessionId)), record: join(base, `${encodeSegment(sessionId)}.json`) }
+}
+
+/** Read one trashed Session's record, or `undefined` when it is unreadable. */
+async function readTrashRecord(root: string, sessionId: string): Promise<TrashRecord | undefined> {
+  try {
+    const raw = await readFile(trashPaths(root, sessionId).record, 'utf8')
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return undefined
+    const record = parsed as Partial<TrashRecord>
+    if (typeof record.sessionId !== 'string' || typeof record.deletedAt !== 'number') return undefined
+    return {
+      sessionId: record.sessionId,
+      cwd: typeof record.cwd === 'string' ? record.cwd : '',
+      projectDirectory: typeof record.projectDirectory === 'string' ? record.projectDirectory : '',
+      ...typeof record.title === 'string' ? { title: record.title } : {},
+      ...typeof record.bytes === 'number' ? { bytes: record.bytes } : {},
+      deletedAt: record.deletedAt,
+      files: Array.isArray(record.files) ? record.files.filter((name): name is string => typeof name === 'string') : []
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/** One trashed Session as the routes report it. */
+function toEntry(record: TrashRecord, retention: number): TrashEntry {
+  return {
+    sessionId: record.sessionId,
+    cwd: record.cwd,
+    ...record.title === undefined ? {} : { title: record.title },
+    ...record.bytes === undefined ? {} : { bytes: record.bytes },
+    deletedAt: record.deletedAt,
+    expiresAt: record.deletedAt + retention,
+    files: record.files
+  }
+}
+
+/** Every trash record this plugin can read, newest first. */
+async function listTrashRecords(root: string): Promise<readonly TrashRecord[]> {
+  const base = join(trashRoot(root), 'entries')
+  let names: readonly string[]
+  try {
+    names = (await readdir(base)).filter((name) => name.endsWith('.json'))
+  } catch {
+    return []
+  }
+  const records: TrashRecord[] = []
+  for (const name of names) {
+    const record = await readTrashRecord(root, name.slice(0, -'.json'.length))
+    if (record !== undefined) records.push(record)
+  }
+  return records.sort((left, right) => right.deletedAt - left.deletedAt)
+}
+
+/**
+ * Move one Session into the trash, recording where it came from.
+ *
+ * A move, not a copy: the caller has already checked that `directory` is exactly
+ * `<root>/<project>/<encoded id>`, so the destination is this plugin's own tree on
+ * the same volume.
+ *
+ * @param ctx - Host context, for the projection title.
+ * @param root - the configured session root.
+ * @param sessionId - the validated Session id.
+ * @param directory - the located, containment-checked Session directory.
+ * @param config - plugin config.
+ * @returns the entry it became, or `undefined` when the move failed.
+ */
+async function moveToTrash(
+  ctx: HostContext,
+  root: string,
+  sessionId: string,
+  directory: string,
+  config: SessionDeleteConfig | undefined
+): Promise<{ readonly entry: TrashEntry; readonly files: readonly string[] } | undefined> {
+  const paths = trashPaths(root, sessionId)
+  try {
+    const files = (await readdir(directory, { withFileTypes: true })).map((entry) => entry.name)
+    let bytes = 0
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!entry.isFile()) continue
+      bytes += (await stat(join(directory, entry.name))).size
+    }
+    const title = await projectedTitle(ctx, sessionId, directory)
+    await mkdir(paths.directory, { recursive: true })
+    await rm(paths.directory, { recursive: true, force: true })
+    await rename(directory, paths.directory)
+    const record: TrashRecord = {
+      sessionId,
+      cwd: await workspaceOf(ctx, sessionId) ?? '',
+      projectDirectory: dirname(directory),
+      ...title === undefined ? {} : { title },
+      bytes,
+      deletedAt: Date.now(),
+      files
+    }
+    await writeFile(paths.record, `${JSON.stringify(record, undefined, 2)}\n`, 'utf8')
+    return { entry: toEntry(record, retentionMs(config)), files }
+  } catch {
+    return undefined
+  }
+}
+
+/** The Session's workspace path, when persistence still knows it. */
+async function workspaceOf(ctx: HostContext, sessionId: string): Promise<string | undefined> {
+  try {
+    const snapshot = await ctx.sessionPersistence.stat(sessionId)
+    const cwd = snapshot?.header.cwd
+    return cwd === undefined || cwd.length === 0 ? undefined : cwd
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The title the Host's projection carries for a Session, if any.
+ * @param ctx - Host context.
+ * @param sessionId - the Session id.
+ * @param directory - its directory, used to identify it to the cache.
+ * @returns the title, or `undefined`.
+ */
+async function projectedTitle(ctx: HostContext, sessionId: string, directory: string): Promise<string | undefined> {
+  const cache = ctx.get('sessionProjectionCache') as SessionProjectionCacheLike | undefined
+  try {
+    const meta = await ctx.sessionQuery.listSessions()
+    const header = meta.find((record) => record.header.id === sessionId)?.header ?? { id: sessionId }
+    void directory
+    const values = cache?.cachedSnapshot(header, ['title'])?.values
+    return typeof values?.title === 'string' && values.title.trim() !== '' ? values.title : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Destroy trashed Sessions whose retention window has closed.
+ * @param ctx - Host context.
+ * @param retention - the window in milliseconds.
+ * @returns how many were destroyed.
+ */
+async function expireTrash(ctx: HostContext, retention: number): Promise<number> {
+  const root = sessionRoot(ctx)
+  const now = Date.now()
+  let purged = 0
+  for (const record of await listTrashRecords(root)) {
+    if (now - record.deletedAt < retention) continue
+    if (await purgeTrashEntry(root, record.sessionId)) purged++
+  }
+  return purged
+}
+
+/**
+ * Remove one trashed Session's files and record for good.
+ *
+ * The containment check is the same shape as the delete path's: the directory must
+ * be exactly one level below the trash's own entries directory and named after the
+ * Session, so nothing here can be talked into an rm somewhere else.
+ *
+ * @param root - the configured session root.
+ * @param sessionId - the Session id.
+ * @returns whether the entry is gone afterwards.
+ */
+async function purgeTrashEntry(root: string, sessionId: string): Promise<boolean> {
+  const paths = trashPaths(root, sessionId)
+  const base = join(trashRoot(root), 'entries')
+  const encoded = encodeSegment(sessionId)
+  if (basename(paths.directory) !== encoded || dirname(paths.directory) !== base) return false
+  try {
+    await rm(paths.directory, { recursive: true, force: true })
+    await rm(paths.record, { force: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Serve one trash listing. Expired entries are destroyed first, so what a caller
+ * sees is always what is actually still restorable.
+ * @param ctx - Host context.
+ * @param config - plugin config.
+ * @param request - the authenticated Fetch request.
+ * @returns a JSON envelope whose value is `{ entries, retentionDays }`.
+ */
+async function handleTrashList(ctx: HostContext, config: SessionDeleteConfig | undefined, request: Request): Promise<Response> {
+  const invalid = await rejectNonEmptyBody(request)
+  if (invalid !== undefined) return invalid
+  const retention = retentionMs(config)
+  try {
+    await expireTrash(ctx, retention)
+    const entries = (await listTrashRecords(sessionRoot(ctx))).map((record) => toEntry(record, retention))
+    return Response.json({
+      ok: true,
+      value: { entries, retentionDays: Math.round(retention / (24 * 60 * 60 * 1000)) }
+    }, { headers: { 'cache-control': 'no-store' } })
+  } catch (error) {
+    return failure('storage-unreadable', `cannot read the trash: ${messageOf(error)}`, 500)
+  }
+}
+
+/**
+ * Serve one restore: put a trashed Session back where it came from.
+ * @param ctx - Host context.
+ * @param request - the authenticated Fetch request.
+ * @returns a JSON envelope, or a refusal when the destination is taken.
+ */
+async function handleSessionRestore(ctx: HostContext, request: Request): Promise<Response> {
+  const body = await readJsonBody(request)
+  if ('response' in body) return body.response
+  const sessionId = sessionIdOf(body.value)
+  if (sessionId === undefined) return failure('invalid-session-id', 'sessionId must be a session-id-shaped string', 400)
+
+  const root = sessionRoot(ctx)
+  const record = await readTrashRecord(root, sessionId)
+  if (record === undefined) return failure('trash-entry-not-found', `nothing in the trash for "${sessionId}"`, 404)
+
+  const project = record.cwd === '' ? record.projectDirectory : projectDirectory(root, record.cwd)
+  const target = join(project, encodeSegment(sessionId))
+  const refusal = containmentRefusal(root, target, encodeSegment(sessionId))
+  if (refusal !== undefined) return failure('unsafe-target', refusal, 500)
+  if (await isDirectory(target)) {
+    return failure('session-exists', `"${encodeSegment(sessionId)}" is already present under "${root}"`, 409)
+  }
+
+  const paths = trashPaths(root, sessionId)
+  try {
+    await mkdir(project, { recursive: true })
+    await rename(paths.directory, target)
+    await rm(paths.record, { force: true })
+  } catch (error) {
+    return failure('restore-failed', `cannot restore "${sessionId}": ${messageOf(error)}`, 500)
+  }
+
+  // The row it left is gone from the browser's list. Whether it reappears at once
+  // depends on the runtime re-reading the sessions root; the client refreshes its
+  // list either way, and a restart always picks it up.
+  ctx.emit('api-session/restored', sessionId)
+  return Response.json({ ok: true, value: { sessionId, directory: target } }, { headers: { 'cache-control': 'no-store' } })
+}
+
+/**
+ * Serve one purge: destroy a trashed Session, or everything in the trash.
+ * @param ctx - Host context.
+ * @param config - plugin config.
+ * @param request - the authenticated Fetch request.
+ * @returns a JSON envelope reporting what was destroyed.
+ */
+async function handleSessionPurge(ctx: HostContext, config: SessionDeleteConfig | undefined, request: Request): Promise<Response> {
+  const body = await readJsonBody(request)
+  if ('response' in body) return body.response
+  const purgeAll = (body.value as { all?: unknown }).all === true
+  const root = sessionRoot(ctx)
+
+  if (!purgeAll) {
+    const sessionId = sessionIdOf(body.value)
+    if (sessionId === undefined) return failure('invalid-session-id', 'sessionId must be a session-id-shaped string, or pass all: true', 400)
+    // A record must exist before a purge can claim to have destroyed anything:
+    // `rm` with `force` succeeds on a missing path, so asking it alone would report
+    // success for an entry that was never there.
+    if (await readTrashRecord(root, sessionId) === undefined) {
+      return failure('trash-entry-not-found', `nothing in the trash for "${sessionId}"`, 404)
+    }
+    if (!await purgeTrashEntry(root, sessionId)) {
+      return failure('delete-failed', `cannot destroy the trashed "${sessionId}"`, 500)
+    }
+    return Response.json({ ok: true, value: { purged: [sessionId] } }, { headers: { 'cache-control': 'no-store' } })
+  }
+
+  void config
+  const purged: string[] = []
+  for (const record of await listTrashRecords(root)) {
+    if (await purgeTrashEntry(root, record.sessionId)) purged.push(record.sessionId)
+  }
+  return Response.json({ ok: true, value: { purged } }, { headers: { 'cache-control': 'no-store' } })
+}
+
+/** Read a request body that must be a JSON object; empty is not allowed here. */
+async function readJsonBody(request: Request): Promise<{ readonly value: Record<string, unknown> } | { readonly response: Response }> {
+  let parsed: unknown
+  try {
+    parsed = await request.json()
+  } catch {
+    return { response: failure('invalid-request', 'the request body must be a JSON object', 400) }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { response: failure('invalid-request', 'the request body must be a JSON object', 400) }
+  }
+  return { value: parsed as Record<string, unknown> }
+}
+
+/** Validate a body's `sessionId`, or `undefined` when it is not acceptable. */
+function sessionIdOf(body: Record<string, unknown>): string | undefined {
+  const sessionId = body.sessionId
+  if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > MAX_SESSION_ID_LENGTH) return undefined
+  if (!SESSION_ID_PATTERN.test(sessionId) || sessionId === '.' || sessionId === '..') return undefined
+  return sessionId
+}
+
+/** Refuse a body that carries anything, for routes that take none. */
+async function rejectNonEmptyBody(request: Request): Promise<Response | undefined> {
+  const text = await request.text()
+  if (text.trim() === '') return undefined
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) return undefined
+  } catch {}
+  return failure('invalid-request', 'the request body must be a JSON object or empty', 400)
 }
 
 /**

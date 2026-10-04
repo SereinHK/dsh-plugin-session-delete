@@ -22,13 +22,15 @@ layer.
 
 ![The delete row at the end of a Session's "..." menu](docs/screenshot-menu.png)
 
-> **Before you install: it deletes, and there is no undo.** One run removes the whole
-> Session directory under the sessions root — **every format generation** of its log — plus
-> its projection-cache record. A Session that is live in the process is refused
-> (`session-live`), and the cleanup action additionally skips the open Session, anything
-> running, and anything with activity inside a one-hour grace window. Attachments, exported
-> files and workspace files are never touched. If you want a recoverable action, use DSH's
-> archive instead.
+> **Before you install: removal is a move, and there is a window to undo it.** The whole
+> Session directory — **every format generation** of its log — plus its projection-cache
+> record is renamed into a trash **beside the sessions root** (the same volume, so the move
+> is atomic), where it stays restorable for a retention window — seven days by default, or
+> whatever the profile configures. The sidebar foot lists what is in there so you can put
+> one back or destroy it now; anything left when the window closes is purged. A Session that
+> is live in the process is refused (`session-live`), and the cleanup action additionally
+> skips the open Session, anything running, and anything with activity inside a one-hour
+> grace window. Attachments, exported files and workspace files are never touched.
 
 ![The confirmation names the conversation and what is removed](docs/screenshot-delete-dialog.png)
 
@@ -87,14 +89,17 @@ dsh-plugin-session-delete`. From a source checkout, `node install.mjs --uninstal
 - `sidebar.workspaces.session.menu.item` — a red **“Delete conversation”** row in
   every Session's `...` menu, after the shipped pin/rename/fork/archive rows.
 - `sidebar.footer.action` — **“Clean up empty conversations”** beside Settings:
-  removes blank Sessions (`blank: true`, i.e. never started a turn) in one run.
-- `shell.overlay` — the two confirmations, each listing exactly what will go: the
-  cleanup names every Session by its title (or path) and says what it reclaims.
-- The node half registers two routes inside Connection's
-  authenticated `/api` fence: `POST /api/session.delete` for one removal, and
-  `POST /api/session.unused`, which reports the durable per-Session facts (is the
-  log empty, and when was it last prompted) that the page cannot derive for itself.
-  Both surfaces call the first one.
+  removes blank Sessions (`blank: true`, i.e. never started a turn) in one run, and
+  **“Trash”** next to it, listing what was removed and offering restore or destroy.
+- `shell.overlay` — the confirmations and the trash listing, each naming Sessions by
+  their title (or path) and saying what they hold: the cleanup shows what a run would
+  reclaim, and the trash shows how long each entry has left.
+- The node half registers five routes inside Connection's authenticated `/api` fence:
+  `POST /api/session.delete` (the move into the trash), `POST /api/session.unused` (the
+  durable per-Session facts — is the log empty, and when was it last prompted — which the
+  page cannot derive for itself), `POST /api/session.trash` (the listing, which purges
+  what has expired before answering), `POST /api/session.restore`, and
+  `POST /api/session.purge` (one entry, or every one of them).
 
 ![The cleanup lists what it would remove, and says what it skips](docs/screenshot-cleanup.png)
 
@@ -197,9 +202,9 @@ The repository root **is** the package, so that a git install resolves its manif
 
 ```sh
 node tools/build.mjs            # src/ -> lib/  (also: node tools/build.mjs --check)
-node --test "tests/*.test.ts"   # 26 tests: host route, cleanup plan, dictionaries
-node tools/verify-artifact.mjs  # 59 host-route checks against the built bytes
-node tools/verify-browser.mjs   # 47 render/interaction checks, refusals included
+node --test "tests/*.test.ts"   # 30 tests: host routes, the trash, cleanup plan, dictionaries
+node tools/verify-artifact.mjs  # 87 host-route checks against the built bytes
+node tools/verify-browser.mjs   # 64 render/interaction checks, refusals included
 node tools/verify-bundle.mjs    # is the package installable, and installed coherently?
 node tools/verify-runtime-contract.mjs   # do this plugin's assumptions about the
                                     # installed runtime still hold? (run after a DSH upgrade)

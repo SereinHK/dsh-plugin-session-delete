@@ -173,6 +173,12 @@ let unusedFacts = []
 /** A forced failure of the durable-facts route, to prove it is worded not swallowed. */
 let unusedFailure = null
 
+/** What the trash route answers, and how often it was asked. */
+let trashAnswer = { entries: [], retentionDays: 7 }
+let trashCalls = 0
+/** Every restore or purge the dialog fired, in order. */
+const trashActions = []
+
 /** One durable row as the Host reports it. */
 function fact(sessionId, overrides = {}) {
   const at = Date.now() - 3 * 60 * 60 * 1000
@@ -196,6 +202,18 @@ globalThis.fetch = async (url, init) => {
     return unusedFailure === null
       ? { ok: true, status: 200, json: async () => ({ ok: true, value: { sessions: unusedFacts } }) }
       : { ok: false, status: 500, json: async () => ({ ok: false, error: unusedFailure }) }
+  }
+  if (target === '/api/session.trash') {
+    trashCalls++
+    return { ok: true, status: 200, json: async () => ({ ok: true, value: trashAnswer }) }
+  }
+  if (target === '/api/session.restore' || target === '/api/session.purge') {
+    trashActions.push({ action: target.endsWith('restore') ? 'restore' : 'purge', body: init?.body })
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, value: target.endsWith('restore') ? { sessionId: 'x', directory: 'y' } : { purged: ['x'] } })
+    }
   }
   const answer = respond(body)
   return { ok: answer.ok, status: answer.status, json: async () => answer.body }
@@ -315,14 +333,16 @@ check('declares its required services', mod.inject.join(',') === 'slots,sessions
 console.log('')
 console.log('registrations')
 mod.apply(ctx)
-check('registered four slot entries', registrations.length === 4, String(registrations.length))
+check('registered six slot entries', registrations.length === 6, String(registrations.length))
 const menu = registrations.find((entry) => entry.options.id === 'session-delete')
 const cleanup = registrations.find((entry) => entry.options.id === 'session-cleanup')
+const trash = registrations.find((entry) => entry.options.id === 'session-trash')
 const dialogs = registrations.filter((entry) => entry.options.id.endsWith('-dialog'))
 check('the row menu entry targets the session menu slot', menu?.key === 'sidebar.workspaces.session.menu.item', menu?.key)
 check('the row menu entry sorts after the shipped archive row (order 900)', menu?.options.order === 900, String(menu?.options.order))
 check('the cleanup entry targets the sidebar foot', cleanup?.key === 'sidebar.footer.action', cleanup?.key)
-check('both dialogs mount into the frame overlay', dialogs.length === 2 && dialogs.every((entry) => entry.key === 'shell.overlay'), dialogs.map((entry) => entry.key).join(','))
+check('the trash entry sits beside it in the foot', trash?.key === 'sidebar.footer.action' && trash?.options.order === 510, `${String(trash?.key)} order ${String(trash?.options.order)}`)
+check('all three dialogs mount into the frame overlay', dialogs.length === 3 && dialogs.every((entry) => entry.key === 'shell.overlay'), dialogs.map((entry) => entry.key).join(','))
 check('dictionaries registered under sessionDelete with zh and en', dictionaries.sessionDelete?.zh !== undefined && dictionaries.sessionDelete?.en !== undefined, JSON.stringify(Object.keys(dictionaries.sessionDelete ?? {})))
 
 const t = translator()
@@ -339,9 +359,12 @@ const deleteDialog = dialogs.find((entry) => entry.options.id === 'session-delet
 const dialogTree = renderRoot(deleteDialog.Component, { t, ...{} , refreshSessions: async () => {} })
 const dialogText = inspect(dialogTree).text.join(' ')
 check('the dialog opens with the conversation title', dialogText.includes('重构会话存储'), dialogText)
-check('the dialog states the scope', dialogText.includes('永久删除') && dialogText.includes('投影缓存'), dialogText)
+// Removal is a move now, and the confirmation has to say so: the words "permanently"
+// and "cannot be undone" belong to the purge route, not to this dialog.
+check('the dialog promises a restorable move', dialogText.includes('移入本机回收站') && dialogText.includes('恢复'), dialogText)
+check('the dialog states the scope', dialogText.includes('投影缓存'), dialogText)
 check('no copy key is missing', !dialogText.includes('!'), dialogText)
-const confirm = handlerFor(dialogTree, /^永久删除$/)
+const confirm = handlerFor(dialogTree, /^移入回收站$/)
 check('the confirm button exists', confirm !== undefined, JSON.stringify(inspect(dialogTree).handlers.map((entry) => entry.label)))
 await confirm.handler()
 await flush()
@@ -448,7 +471,7 @@ console.log('a refused removal')
       refreshesAfterRefusal++
     }
   })
-  await handlerFor(tree, /^永久删除$/).handler()
+  await handlerFor(tree, /^移入回收站$/).handler()
   await flush()
   const text = inspect(renderRoot(deleteDialog.Component, { t, refreshSessions: async () => {} })).text.join(' ')
   check('the Host message reaches the operator', text.includes('session "session-a" is live'), text)
@@ -504,6 +527,64 @@ console.log('a cleanup target that became live')
   const settledText = inspect(renderCleanupDialog()).text.join(' ')
   check('an in-use Session is reported as skipped, not failed', settledText.includes('正在使用，已跳过'), settledText)
   check('it is not reported as an error', !settledText.includes('1 个失败'), settledText)
+}
+
+console.log('')
+console.log('the trash')
+{
+  const trashDialog = dialogs.find((entry) => entry.options.id === 'session-trash-dialog')
+  const trashButton = registrations.find((entry) => entry.options.id === 'session-trash')?.Component
+  check('the trash has a footer trigger', trashButton !== undefined)
+  resetRoot(trashDialog.Component)
+  const day = 24 * 60 * 60 * 1000
+  trashAnswer = {
+    entries: [
+      {
+        sessionId: 'session-gone',
+        cwd: 'C:\\work\\alpha',
+        title: '演示对话',
+        bytes: 12_400,
+        deletedAt: Date.now() - day,
+        expiresAt: Date.now() + 6 * day,
+        files: ['session.v4.jsonl.zstd']
+      }
+    ],
+    retentionDays: 7
+  }
+  trashCalls = 0
+  trashActions.length = 0
+  const buttonTree = renderRoot(trashButton, { wide: true, t })
+  check('the trigger renders its label', inspect(buttonTree).text.join(' ').includes('回收站'), inspect(buttonTree).text.join(' '))
+  handlerFor(buttonTree, /回收站/).handler()
+  await flush()
+  const tree = renderRoot(trashDialog.Component, { t })
+  const text = inspect(tree).text.join(' ')
+  check('the dialog counts what is in there and states the window', text.includes('1 个对话') && text.includes('7 天'), text)
+  check('it names the Session by its title', text.includes('演示对话'), text)
+  check('it says what it still holds', text.includes('12.4 kB'), text)
+  check('it says how long is left', text.includes('6 天'), text)
+  check('no copy key is missing', !text.includes('!'), text)
+
+  const restore = handlerFor(tree, /^恢复$/)
+  check('a restore action is offered', restore !== undefined, JSON.stringify(inspect(tree).handlers.map((entry) => entry.label)))
+  await restore.handler()
+  await flush()
+  check('restoring calls the Host route', trashActions[0]?.action === 'restore' && String(trashActions[0]?.body).includes('session-gone'), JSON.stringify(trashActions))
+  check('and re-reads the listing afterwards', trashCalls >= 2, String(trashCalls))
+  const afterRestore = inspect(renderRoot(trashDialog.Component, { t })).text.join(' ')
+  check('it reports what happened', afterRestore.includes('已恢复'), afterRestore)
+
+  // Destroying for good asks first: the label changes to the confirmation.
+  const purge = handlerFor(renderRoot(trashDialog.Component, { t }), /^彻底删除$/)
+  purge.handler()
+  await flush()
+  const asking = inspect(renderRoot(trashDialog.Component, { t })).text.join(' ')
+  check('purging asks before it destroys', asking.includes('无法恢复'), asking)
+  const committed = handlerFor(renderRoot(trashDialog.Component, { t }), /确定删除这一个/)
+  check('and the question carries the action', committed !== undefined, asking)
+  await committed.handler()
+  await flush()
+  check('the purge reaches the Host', trashActions.some((entry) => entry.action === 'purge'), JSON.stringify(trashActions))
 }
 
 console.log('')

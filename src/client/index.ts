@@ -1,17 +1,18 @@
 /**
  * Delete-conversation surface, browser half.
  *
- * Three additive contributions and no takeover:
+ * Additive contributions and no takeover:
  *
  * - `sidebar.workspaces.session.menu.item` — the red "delete conversation" row
  *   in one Session's "..." menu.
- * - `sidebar.footer.action` — the blank-Session cleanup trigger beside Settings.
- * - `shell.overlay` — the two confirmations those entries open.
+ * - `sidebar.footer.action` — the blank-Session cleanup trigger beside Settings, and
+ *   the trash beside it.
+ * - `shell.overlay` — the confirmations and the trash listing those entries open.
  *
- * Every removal goes through this package's own authenticated Host route
- * (`POST /api/session.delete`, registered by the node half), and every skip
- * decision is made by `cleanup-plan.ts`. `apply` is also the only place holding
- * the sessions service, so it hands the dialogs their refresh hop.
+ * A removal is a MOVE into the trash, so it can be taken back; `POST /api/session.delete`
+ * does the move and the trash routes list, restore and destroy. Every skip decision is
+ * made by `cleanup-plan.ts`. `apply` is also the only place holding the sessions
+ * service, so it hands the dialogs their refresh hop.
  *
  * @module @deepseek-ai/dsh-client-ui-session-delete/client
  */
@@ -21,6 +22,8 @@ import { DeleteSessionMenuItem } from './DeleteSessionMenuItem'
 import { DeleteSessionDialog } from './DeleteSessionDialog'
 import { CleanupButton } from './CleanupButton'
 import { CleanupDialog } from './CleanupDialog'
+import { TrashButton } from './TrashButton'
+import { TrashDialog } from './TrashDialog'
 
 /** Required services: the slot registry, the Session list store, and copy. */
 export const inject = ['slots', 'sessions', 'locale']
@@ -82,4 +85,17 @@ export function apply(ctx: ClientContext): void {
     locale: LOCALE_NAMESPACE,
     inject: () => ({ refreshSessions: () => refreshSessions() })
   }, CleanupDialog))
+
+  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+    name: 'sidebar.footer.action',
+    id: 'session-trash',
+    order: 510,
+    locale: LOCALE_NAMESPACE
+  }, TrashButton))
+
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+    name: 'shell.overlay',
+    id: 'session-trash-dialog',
+    locale: LOCALE_NAMESPACE
+  }, TrashDialog))
 }
