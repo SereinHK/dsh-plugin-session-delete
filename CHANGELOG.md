@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+Stored Sessions that fell under "ungrouped" are put back where they belong.
+
+- **New: `POST /api/session.adopt`**, and the same repair once at startup. A workspace owns
+  Sessions through an *ownership account* (`sessionIds`), and the runtime attaches a Session
+  only as it is *created* — so when a folder is added as a workspace, or renamed and added
+  again, its older Sessions keep rendering under "ungrouped" and nothing in the UI can fix
+  them. The plugin attaches every stored Session whose header path resolves to a registered
+  workspace, and leaves the rest alone.
+- It never creates, moves or deletes anything: an attached Session is skipped before
+  `attachSession` is called (the method is idempotent anyway), a folder that no longer exists
+  is skipped, and a Session whose header disagrees with the workspace path is left for the
+  operator rather than papered over.
+- Suites: 31 package tests, 95 host-route checks against the built bytes (adoption among
+  them: mounting, idempotence, a vanished folder, a folder that is not a workspace), 64
+  render and interaction checks.
+
 ## 0.2.0
 
 Removal is a move now: a deleted conversation goes into a trash beside the sessions

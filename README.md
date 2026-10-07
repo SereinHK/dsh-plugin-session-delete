@@ -94,12 +94,16 @@ dsh-plugin-session-delete`. From a source checkout, `node install.mjs --uninstal
 - `shell.overlay` — the confirmations and the trash listing, each naming Sessions by
   their title (or path) and saying what they hold: the cleanup shows what a run would
   reclaim, and the trash shows how long each entry has left.
-- The node half registers five routes inside Connection's authenticated `/api` fence:
+- The node half registers six routes inside Connection's authenticated `/api` fence:
   `POST /api/session.delete` (the move into the trash), `POST /api/session.unused` (the
   durable per-Session facts — is the log empty, and when was it last prompted — which the
   page cannot derive for itself), `POST /api/session.trash` (the listing, which purges
   what has expired before answering), `POST /api/session.restore`, and
-  `POST /api/session.purge` (one entry, or every one of them).
+  `POST /api/session.purge` (one entry, or every one of them), and `POST /api/session.adopt`,
+  which attaches stored Sessions to the workspace that owns their folder — the runtime only
+  attaches a Session as it is created, so after a folder is added (or renamed and added) as a
+  workspace its older Sessions sit under "ungrouped" with no UI able to fix them. The plugin
+  also runs that repair once at startup.
 
 ![The cleanup lists what it would remove, and says what it skips](docs/screenshot-cleanup.png)
 
@@ -202,8 +206,8 @@ The repository root **is** the package, so that a git install resolves its manif
 
 ```sh
 node tools/build.mjs            # src/ -> lib/  (also: node tools/build.mjs --check)
-node --test "tests/*.test.ts"   # 30 tests: host routes, the trash, cleanup plan, dictionaries
-node tools/verify-artifact.mjs  # 87 host-route checks against the built bytes
+node --test "tests/*.test.ts"   # 31 tests: host routes, the trash, adoption, cleanup plan, dictionaries
+node tools/verify-artifact.mjs  # 95 host-route checks against the built bytes
 node tools/verify-browser.mjs   # 64 render/interaction checks, refusals included
 node tools/verify-bundle.mjs    # is the package installable, and installed coherently?
 node tools/verify-runtime-contract.mjs   # do this plugin's assumptions about the

@@ -49,6 +49,19 @@ export const SESSION_RESTORE_PATH = '/api/session.restore'
 /** Destroy one trashed Session, or every one of them, for good. */
 export const SESSION_PURGE_PATH = '/api/session.purge'
 
+/**
+ * Attach stored Sessions to the workspace that owns their folder.
+ *
+ * The runtime attaches a Session when it is *created* (`session.create`: "create or
+ * idempotently adopt one ordinary Session") and offers no entry point for one that
+ * already exists — so once a folder is added as a workspace, or renamed and added
+ * again, its older Sessions keep rendering under "ungrouped" with nothing in the UI
+ * able to fix them. This is that one repair, and it is why the plugin runs it once at
+ * startup: it never creates, moves or deletes anything, and the attach itself is
+ * idempotent.
+ */
+export const SESSION_ADOPT_PATH = '/api/session.adopt'
+
 /** How long a trashed Session stays restorable unless the profile says otherwise. */
 const DEFAULT_RETENTION_DAYS = 7
 
@@ -74,7 +87,7 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]+$/
  * is the Host's own enumeration of stored Sessions, which is where the durable
  * per-Session facts come from.
  */
-export const inject = ['connection', 'sessionPersistence', 'sessions', 'sessionQuery']
+export const inject = ['connection', 'sessionPersistence', 'sessions', 'sessionQuery', 'workspaceRegistry']
 
 /** The slice of Connection this plugin uses. */
 interface FetchRouteRegistry {
@@ -110,6 +123,18 @@ interface SessionRecordLike {
 /** The slice of Session query this plugin uses. */
 interface SessionQueryLike {
   listSessions(signal?: AbortSignal): Promise<readonly SessionRecordLike[]>
+}
+
+/** One workspace as the registry reports it. */
+interface WorkspaceLike {
+  readonly path: string
+  readonly sessionIds: readonly string[]
+  attachSession(sessionId: string): Promise<void>
+}
+
+/** The slice of the workspace registry this plugin uses. */
+interface WorkspaceRegistryLike {
+  list(): readonly WorkspaceLike[]
 }
 
 /**
@@ -148,6 +173,7 @@ interface HostContext {
   readonly sessionPersistence: SessionPersistenceLike
   readonly sessions: SessionStoreLike
   readonly sessionQuery: SessionQueryLike
+  readonly workspaceRegistry: WorkspaceRegistryLike
   get(name: string): unknown
   effect(callback: () => unknown, label?: string): unknown
   emit(event: string, ...args: unknown[]): unknown
@@ -236,6 +262,20 @@ export function apply(ctx: HostContext, config?: SessionDeleteConfig): void {
     requestBody: 'buffered',
     fetch: (request) => handleSessionPurge(ctx, config, request)
   }), `session-delete: POST ${SESSION_PURGE_PATH}`)
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: SESSION_ADOPT_PATH,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: (request) => handleSessionAdopt(ctx, request)
+  }), `session-delete: POST ${SESSION_ADOPT_PATH}`)
+
+  // The repair, once per start: stored Sessions whose folder is a registered
+  // workspace but which were never attached to it render under "ungrouped" with no
+  // UI able to fix that. Best-effort — a failure here must not stop the mount.
+  ctx.effect(() => {
+    void adoptStoredSessions(ctx).catch(() => {})
+    return () => {}
+  }, 'session-delete: attach stored Sessions to their workspaces')
 
   // Expiry is lazy (a list purges what has aged out), but a profile that has not
   // opened the trash for a month should not accumulate one. Best-effort: a failure
@@ -724,8 +764,80 @@ async function handleSessionPurge(ctx: HostContext, config: SessionDeleteConfig 
   return Response.json({ ok: true, value: { purged } }, { headers: { 'cache-control': 'no-store' } })
 }
 
-/** Read a request body that must be a JSON object; empty is not allowed here. */
-async function readJsonBody(request: Request): Promise<{ readonly value: Record<string, unknown> } | { readonly response: Response }> {
+/**
+ * Attach every stored Session whose folder is a registered workspace, when it is not
+ * attached yet.
+ *
+ * The workspace path is the `fs.realpath` canon the registry stamped, and a Session's
+ * header carries the path it was created in, so both sides are resolved before they
+ * are compared: a folder that has been renamed resolves to nothing and is left alone,
+ * and a link into a workspace counts as that workspace. Idempotent by construction —
+ * an attached Session is skipped before `attachSession` is called, and the method
+ * itself is a no-op for one already in the account.
+ *
+ * @param ctx - Host context carrying the workspace registry and Session query.
+ * @returns the ids it attached, and how many stored Sessions it left alone.
+ */
+async function adoptStoredSessions(ctx: HostContext): Promise<{ readonly adopted: readonly string[]; readonly skipped: number }> {
+  const workspaces = ctx.workspaceRegistry.list()
+  if (workspaces.length === 0) return { adopted: [], skipped: 0 }
+  const byPath = new Map(workspaces.map((workspace) => [workspace.path, workspace]))
+  let records: readonly SessionRecordLike[]
+  try {
+    records = await ctx.sessionQuery.listSessions()
+  } catch {
+    return { adopted: [], skipped: 0 }
+  }
+
+  const adopted: string[] = []
+  let skipped = 0
+  for (const record of records) {
+    const cwd = record.header.cwd
+    if (cwd === undefined || cwd.length === 0) continue
+    let real: string
+    try {
+      real = await realpath(cwd)
+    } catch {
+      // The folder is gone: there is no workspace to attach to, and nothing to fix.
+      skipped++
+      continue
+    }
+    const workspace = byPath.get(real)
+    if (workspace === undefined) {
+      skipped++
+      continue
+    }
+    if (workspace.sessionIds.includes(record.header.id)) continue
+    try {
+      await workspace.attachSession(record.header.id)
+      adopted.push(record.header.id)
+    } catch {
+      // attachSession validates the header against the workspace path; a refusal here
+      // means the two disagree, which is exactly what must not be papered over.
+      skipped++
+    }
+  }
+  return { adopted, skipped }
+}
+
+/**
+ * Serve one adopt request: the same repair, on demand.
+ * @param ctx - Host context.
+ * @param request - the authenticated Fetch request.
+ * @returns a JSON envelope reporting what it attached.
+ */
+async function handleSessionAdopt(ctx: HostContext, request: Request): Promise<Response> {
+  const invalid = await rejectNonEmptyBody(request)
+  if (invalid !== undefined) return invalid
+  try {
+    const result = await adoptStoredSessions(ctx)
+    return Response.json({ ok: true, value: result }, { headers: { 'cache-control': 'no-store' } })
+  } catch (error) {
+    return failure('adopt-failed', `cannot attach stored sessions: ${messageOf(error)}`, 500)
+  }
+}
+
+/** Read a request body that must be a JSON object; empty is not allowed here. */async function readJsonBody(request: Request): Promise<{ readonly value: Record<string, unknown> } | { readonly response: Response }> {
   let parsed: unknown
   try {
     parsed = await request.json()

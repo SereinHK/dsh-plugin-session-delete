@@ -8,12 +8,13 @@
  *
  * @module @deepseek-ai/dsh-client-ui-session-delete/tests/scenarios
  */
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   encodeSegment,
   projectKey,
+  SESSION_ADOPT_PATH,
   SESSION_DELETE_PATH,
   SESSION_PURGE_PATH,
   SESSION_RESTORE_PATH,
@@ -62,6 +63,12 @@ export interface MountOptions {
   readonly titles?: Readonly<Record<string, string>>
   /** Plugin config: how long the trash keeps things. */
   readonly retentionDays?: number
+  /** Workspace registry entries: a path, and the Session ids already attached to it. */
+  readonly workspaces?: readonly { readonly path: string; readonly attached: readonly string[] }[]
+  /** Records the query service reports, when they should differ from the headers. */
+  readonly records?: readonly { readonly id: string; readonly cwd?: string | undefined }[]
+  /** Collects every `attachSession` the plugin called, in order. */
+  readonly attached?: string[]
 }
 
 /** Collects checks for one section without aborting on the first failure. */
@@ -127,6 +134,8 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
     const events: [string, unknown][] = []
     const live = new Set(Object.keys(headers).filter((id) => headers[id] === 'live'))
     const createdAt = 1_700_000_000_000
+    /** The ownership account, shared by every `list()` of this mount. */
+    const owned = new Map((options.workspaces ?? []).map((workspace) => [workspace.path, [...workspace.attached]]))
     apply({
       effect: (callback: () => unknown) => {
         const disposer = callback()
@@ -148,9 +157,28 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
       // reads them through. Both are stubs here; the real shapes are what the
       // running app was verified against.
       sessionQuery: {
-        listSessions: async () => Object.entries(headers)
-          .filter(([, value]) => value !== 'live')
-          .map(([id, value]) => ({ header: { id, cwd: (value as { cwd: string }).cwd, createdAt } }))
+        listSessions: async () => {
+          const records = options.records ?? Object.entries(headers)
+            .filter(([, value]) => value !== 'live')
+            .map(([id, value]) => ({ id, cwd: (value as { cwd: string }).cwd }))
+          return records.map((record) => ({ header: { id: record.id, cwd: record.cwd, createdAt } }))
+        }
+      },
+      workspaceRegistry: {
+        // Ownership lives outside `list()`: the real registry hands back entities that
+        // share one account, so an attach in one run is visible to the next — which is
+        // what makes the second run a no-op.
+        list: () => (options.workspaces ?? []).map((workspace) => ({
+          path: workspace.path,
+          get sessionIds() {
+            return owned.get(workspace.path) ?? []
+          },
+          attachSession: async (sessionId: string) => {
+            options.attached?.push(sessionId)
+            const account = owned.get(workspace.path) ?? []
+            if (!account.includes(sessionId)) owned.set(workspace.path, [...account, sessionId])
+          }
+        }))
       },
       get: (name: string) => {
         if (name !== 'sessionProjectionCache') return undefined
@@ -315,6 +343,51 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
       section.check('and leaves the files alone', await exists(join(outside, id, 'session.v4.jsonl.zstd')))
       section.check('naming the real path it refused', String(payload?.error?.message).includes('outside the session root'), String(payload?.error?.message))
     }
+    results.push(section.result())
+  }
+
+  // ── adopting stored Sessions into their workspaces ───────────────────────────
+  // The runtime attaches a Session when it is created and has no entry point for one
+  // that already exists, so a folder added (or renamed and added) as a workspace leaves
+  // its older Sessions under "ungrouped". This is the repair, and these are its edges.
+  {
+    const section = new Section('adopt stored Sessions')
+    const wsA = join(home, 'ws-a')
+    const wsB = join(home, 'ws-b')
+    await mkdir(wsA, { recursive: true })
+    await mkdir(wsB, { recursive: true })
+    const gone = join(home, 'was-renamed-away')
+    const attached: string[] = []
+    const stub = mount({}, {
+      workspaces: [{ path: await realpath(wsA), attached: ['session-already'] }, { path: await realpath(wsB), attached: [] }],
+      records: [
+        { id: 'session-fresh-a', cwd: wsA },
+        { id: 'session-already', cwd: wsA },
+        { id: 'session-fresh-b', cwd: wsB },
+        { id: 'session-elsewhere', cwd: gone },
+        { id: 'session-no-cwd', cwd: undefined }
+      ],
+      attached
+    })
+    // The mount itself runs the repair, so by the time the route is called there is
+    // nothing left to do — which is the idempotence this feature has to have.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    section.check('the mount repair attaches what a workspace owns', attached.join(',') === 'session-fresh-a,session-fresh-b', attached.join(','))
+    section.check('it leaves an already-attached Session alone', !attached.includes('session-already'), attached.join(','))
+    section.check('it leaves a Session whose folder is gone alone', !attached.includes('session-elsewhere'), attached.join(','))
+
+    const { status, payload } = await call(stub, {}, SESSION_ADOPT_PATH)
+    section.check('an adopt answers 200', status === 200, JSON.stringify(payload))
+    section.check('running it again adopts nothing', payload?.value?.adopted?.length === 0, JSON.stringify(payload?.value))
+    section.check('and reports what it could not attach', payload?.value?.skipped === 1, JSON.stringify(payload?.value))
+
+    // A registry that disagrees with the header is a refusal, not a silent attach.
+    section.check('no workspaces means nothing to do', (await call(mount({}, { workspaces: [], records: [{ id: 'session-x', cwd: wsA }] }), {}, SESSION_ADOPT_PATH)).payload?.value?.adopted?.length === 0)
+
+    // And a session whose folder exists but is not a workspace is left for the user.
+    const stranger: string[] = []
+    await call(mount({}, { workspaces: [{ path: await realpath(wsB), attached: [] }], records: [{ id: 'session-stranger', cwd: wsA }], attached: stranger }), {}, SESSION_ADOPT_PATH)
+    section.check('a folder that is not a workspace is not attached anywhere', !stranger.includes('session-stranger'), JSON.stringify(stranger))
     results.push(section.result())
   }
 
