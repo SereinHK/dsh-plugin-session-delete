@@ -576,18 +576,28 @@ console.log('the trash')
   const afterRestore = inspect(renderRoot(trashDialog.Component, { t })).text.join(' ')
   check('it reports what happened', afterRestore.includes('已恢复'), afterRestore)
 
-  // Destroying for good asks first: the label changes to the confirmation.
+  // Destroying for good asks first: the warning moves into the body as red text and the
+  // button becomes a short label — the sentence never sits in the button.
   const purge = handlerFor(renderRoot(trashDialog.Component, { t }), /^彻底删除$/)
   purge.handler()
   await flush()
   const asking = inspect(renderRoot(trashDialog.Component, { t })).text.join(' ')
   check('purging asks before it destroys', asking.includes('无法恢复'), asking)
-  const confirmed = handlerFor(renderRoot(trashDialog.Component, { t }), /确定删除这一个/)
-  check('and the question carries the action', confirmed !== undefined, asking)
+  check('the question names the conversation', asking.includes('演示对话'), asking)
+  const confirmed = handlerFor(renderRoot(trashDialog.Component, { t }), /^确定删除$/)
+  check('the confirm control is a short label, not the sentence', confirmed?.label === '确定删除', String(confirmed?.label))
   // Red at both steps, from the theme's own token rather than a literal: `Button` has
   // no danger variant, so this is the only way to say "irreversible" in its language.
   const red = 'var(--dsw-alias-state-error-primary)'
-  check('the destructive row action is red', inspect(renderRoot(trashDialog.Component, { t })).handlers.some((entry) => entry.props?.style?.color === red), JSON.stringify(inspect(renderRoot(trashDialog.Component, { t })).handlers.map((entry) => entry.props?.style)))
+  const rendered = inspect(renderRoot(trashDialog.Component, { t }))
+  const warningRed = (function findWarning(node) {
+    if (node === null || node === undefined || typeof node !== 'object') return false
+    if (Array.isArray(node)) return node.some(findWarning)
+    const own = node.props?.style?.color === red
+    return own || findWarning(node.props?.children)
+  })(renderRoot(trashDialog.Component, { t }))
+  check('and carries the danger colour', warningRed === true, asking)
+  check('the destructive row action is red', rendered.handlers.some((entry) => entry.props?.style?.color === red), JSON.stringify(rendered.handlers.map((entry) => entry.props?.style)))
   check('and its confirmation is filled red', confirmed?.props?.style?.backgroundColor === red, JSON.stringify(confirmed?.props?.style))
   const purgeAll = handlerFor(renderRoot(trashDialog.Component, { t }), /^清空回收站$/)
   check('emptying the trash is red too', purgeAll?.props?.style?.color === red, JSON.stringify(purgeAll?.props?.style))

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.2
+
+The destructive confirmation reads as a warning instead of shouting from a button.
+
+- A whole question — "Emptying the trash permanently deletes all 1 entries. Continue?" —
+  was sitting in the **button label**, and the danger was carried by the button's fill
+  rather than by the sentence. The two are separated now: the warning is a line of red
+  text in the dialog body, naming what will go ("…will be deleted for good. This cannot be
+  undone.", with the conversation's title), and the button is a two-word label which fills
+  red only once the confirmation is showing.
+- Pinned by checks that assert the shape rather than the pixels: the confirm control's
+  label is exactly "确定删除" (not the sentence), the warning carries the theme's
+  `--dsw-alias-state-error-primary`, and the row's own action is red before it is filled.
+
 ## 0.3.1
 
 The two actions in the trash that cannot be undone are red.

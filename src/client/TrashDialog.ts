@@ -167,7 +167,7 @@ function TrashForm(props: TrashDialogProps & { readonly request: TrashRequest })
       style: DESTRUCTIVE_FILL,
       disabled: working,
       onClick: () => { act({ all: true, label: props.t('trash.purgeAll') }) },
-      children: props.t('trash.confirmAll', { n: entries.length })
+      children: props.t('trash.confirmAllButton')
     })
     : entries.length > 0 && React.createElement(primitives.Button, {
       variant: 'outline',
@@ -191,6 +191,23 @@ function TrashForm(props: TrashDialogProps & { readonly request: TrashRequest })
           : props.t('trash.desc', { n: entries.length, days: props.request.retentionDays ?? 7 }),
     footer,
     children: [
+      // The warning is a line of red text, not a red button label: the operator reads
+      // what is about to be destroyed before reaching for the control, and the control
+      // itself stays a two-word label.
+      run.askingAll && React.createElement('p', {
+        key: 'asking-all',
+        role: 'alert',
+        style: { ...DESTRUCTIVE_TEXT, margin: 0 }
+      }, props.t('trash.confirmAllAsk', { n: entries.length })),
+      run.askingId !== null && React.createElement('p', {
+        key: 'asking-one',
+        role: 'alert',
+        style: { ...DESTRUCTIVE_TEXT, margin: 0 }
+      }, props.t('trash.confirmPurgeAsk', {
+        title: entries.find((entry) => entry.sessionId === run.askingId)?.title
+          ?? entries.find((entry) => entry.sessionId === run.askingId)?.cwd
+          ?? run.askingId
+      })),
       run.note !== null && React.createElement('p', {
         key: 'note',
         role: run.failed ? 'alert' : 'status',
@@ -267,7 +284,7 @@ function TrashRow(props: {
         size: 'sm',
         disabled: props.disabled,
         onClick: props.asking ? props.onPurge : props.onAsk,
-        children: props.asking ? t('trash.confirmPurge') : t('trash.purge')
+        children: props.asking ? t('trash.confirmPurgeButton') : t('trash.purge')
       })
     ])
   ])
