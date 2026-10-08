@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.4
+
+A conversation can be deleted after switching away from it; no restart needed.
+
+- Deleting refused with `session-live` whenever the Session was **resident** in the
+  process, and `ctx.sessions.get` keeps answering yes for as long as DSH runs — switching
+  to another conversation does not release it. So the instruction in that message ("switch to
+  another conversation and delete it then") was impossible to follow, and the operator had to
+  restart DSH. Residency is no longer a refusal: the move is attempted and the filesystem
+  decides. A log a running turn still holds open fails to rename, and **that** is
+  `session-open` — worded for what it is, with the fix that actually applies.
+- A failed move no longer swallows its reason. A held path and a broken one need different
+  words and only one is worth retrying, so `moveToTrash` returns the error and the route
+  reports it; `isLockedError` (`EBUSY`, `EPERM`, `EACCES`) is the whole of the
+  classification, and it is exported so the suite can pin it.
+- Suites: 31 package tests, 99 host-route checks against the built bytes (a resident Session
+  being moved rather than refused, the trash landing where it should, the removal event, the
+  classifier, and a non-lock failure keeping its reason), 69 render and interaction checks.
+
 ## 0.3.3
 
 The destructive buttons keep the outline look throughout.

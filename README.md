@@ -28,9 +28,10 @@ layer.
 > is atomic), where it stays restorable for a retention window — seven days by default, or
 > whatever the profile configures. The sidebar foot lists what is in there so you can put
 > one back or destroy it now; anything left when the window closes is purged. A Session that
-> is live in the process is refused (`session-live`), and the cleanup action additionally
-> skips the open Session, anything running, and anything with activity inside a one-hour
-> grace window. Attachments, exported files and workspace files are never touched.
+> log a running turn still holds open is refused (`session-open`) — being resident is not
+> enough to refuse, because switching conversations does not release a Session and the
+> operator would otherwise have to restart DSH. The cleanup action additionally skips the
+> open Session, anything running, and anything with activity inside a one-hour grace window. Attachments, exported files and workspace files are never touched.
 
 ![The confirmation names the conversation and what is removed](docs/screenshot-delete-dialog.png)
 
@@ -207,7 +208,7 @@ The repository root **is** the package, so that a git install resolves its manif
 ```sh
 node tools/build.mjs            # src/ -> lib/  (also: node tools/build.mjs --check)
 node --test "tests/*.test.ts"   # 31 tests: host routes, the trash, adoption, cleanup plan, dictionaries
-node tools/verify-artifact.mjs  # 95 host-route checks against the built bytes
+node tools/verify-artifact.mjs  # 99 host-route checks against the built bytes
 node tools/verify-browser.mjs   # 69 render/interaction checks, refusals included
 node tools/verify-bundle.mjs    # is the package installable, and installed coherently?
 node tools/verify-runtime-contract.mjs   # do this plugin's assumptions about the

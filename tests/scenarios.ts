@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path'
 import {
   encodeSegment,
   projectKey,
+  isLockedError,
   SESSION_ADOPT_PATH,
   SESSION_DELETE_PATH,
   SESSION_PURGE_PATH,
@@ -510,17 +511,36 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
     results.push(section.result())
   }
 
-  // ── live session refusal ─────────────────────────────────────────────────────
+  // ── a resident Session must NOT block the move ───────────────────────────────
+  // `ctx.sessions.get` answers "is it resident in this process", which stays true after
+  // switching to another conversation — it is released only when DSH exits. Refusing on
+  // that made the operator restart the app to delete a conversation they had already
+  // switched away from, so residency is no longer a refusal: the move is attempted and
+  // the filesystem decides. This section is the regression test for that.
   {
-    const section = new Section('live session')
+    const section = new Section('resident session')
     const id = 'session-live-0000-0000-0000-000000000000'
     const directory = await seed(id)
     const stub = mount({ [id]: 'live' })
     const { status, payload } = await call(stub, { sessionId: id })
-    section.check('answers 409', status === 409, String(status))
-    section.check('reports session-live', payload?.error?.code === 'session-live', JSON.stringify(payload?.error))
-    section.check('kept the session directory', await exists(directory))
-    section.check('emitted nothing', stub.events.length === 0)
+    section.check('a resident Session is deleted, not refused', status === 200, JSON.stringify(payload?.error ?? payload?.value?.sessionId))
+    section.check('its directory really moved out of the sessions root', !(await exists(directory)))
+    section.check('it landed in the trash', await exists(join(trashBase, encodeSegment(id))))
+    section.check('and the browser is told the row is gone', stub.events.some(([event, target]) => event === 'api-session/removed' && target === id), JSON.stringify(stub.events))
+
+    // A move that fails for a reason other than a held handle keeps that reason: the two
+    // problems need different words, and one of them is worth retrying.
+    section.check('a held path is classified as held', isLockedError({ code: 'EBUSY' }) && isLockedError({ code: 'EPERM' }) && isLockedError({ code: 'EACCES' }))
+    section.check('a broken path is not', !isLockedError({ code: 'ENOTDIR' }) && !isLockedError(new Error('boom')) && !isLockedError(undefined))
+    const blocked = 'session-blocked-0000-0000-0000-000000000000'
+    const blockedDirectory = await seed(blocked)
+    // A plain file where the trash wants a directory: the move fails, and for a reason
+    // that is not a lock.
+    await mkdir(trashBase, { recursive: true })
+    await writeFile(join(trashBase, encodeSegment(blocked)), 'not a directory\n', 'utf8')
+    const blockedResult = await call(mount({ [blocked]: { cwd: home } }), { sessionId: blocked })
+    section.check('a failed move reports the real reason, not a lock', blockedResult.payload?.error?.code === 'delete-failed' && /ENOTDIR|EEXIST|EPERM/.test(String(blockedResult.payload?.error?.message)), JSON.stringify(blockedResult.payload?.error))
+    section.check('and the Session is left where it was', await exists(blockedDirectory))
     results.push(section.result())
   }
 

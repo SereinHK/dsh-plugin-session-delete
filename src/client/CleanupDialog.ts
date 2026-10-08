@@ -157,7 +157,7 @@ async function runCleanup(
       removed++
     } catch (reason) {
       const code = (reason as SessionDeleteFailure).code
-      if (code === 'session-live') inUse++
+      if (code === 'session-open') inUse++
       else {
         failed++
         firstFailure ??= reason instanceof Error ? reason.message : String(reason)

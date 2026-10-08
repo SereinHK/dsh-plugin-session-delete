@@ -74,7 +74,7 @@ export interface SessionDeleteFailure extends Error {
 
 /** Host failure codes this package words for itself; anything else keeps the Host diagnostic. */
 const WORDED_FAILURES: Readonly<Record<string, string>> = {
-  'session-live': 'dialog.live',
+  'session-open': 'dialog.open',
   'session-not-found': 'dialog.notFound',
   'unsafe-target': 'dialog.unsafe'
 }

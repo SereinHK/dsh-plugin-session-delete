@@ -463,7 +463,7 @@ console.log('a refused removal')
   respond = () => ({
     ok: false,
     status: 409,
-    body: { ok: false, error: { code: 'session-live', message: 'session "session-a" is live in this process' } }
+    body: { ok: false, error: { code: 'session-open', message: 'the log of "session-a" could not be moved: the file is still held open by this process' } }
   })
   let refreshesAfterRefusal = 0
   openDialog.handler()
@@ -476,8 +476,8 @@ console.log('a refused removal')
   await handlerFor(tree, /^移入回收站$/).handler()
   await flush()
   const text = inspect(renderRoot(deleteDialog.Component, { t, refreshSessions: async () => {} })).text.join(' ')
-  check('the Host message reaches the operator', text.includes('session "session-a" is live'), text)
-  check('the refusal is worded in the operator\'s language', text.includes('该对话正被当前窗口打开'), text)
+  check('the Host message reaches the operator', text.includes('the file is still held open'), text)
+  check('the refusal is worded in the operator\'s language', text.includes('仍被当前进程占用'), text)
   check('the dialog stays open for a retry', text.includes('删除这个对话？'), text)
   check('no list refresh is attempted after a refusal', refreshesAfterRefusal === 0, String(refreshesAfterRefusal))
 }
@@ -518,7 +518,7 @@ console.log('a cleanup target that became live')
   respond = () => ({
     ok: false,
     status: 409,
-    body: { ok: false, error: { code: 'session-live', message: 'session is live in this process' } }
+    body: { ok: false, error: { code: 'session-open', message: 'the file is still held open by this process' } }
   })
   requests.length = 0
   openCleanup.handler()
