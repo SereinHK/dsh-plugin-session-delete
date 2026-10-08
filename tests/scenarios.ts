@@ -370,8 +370,12 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
       attached
     })
     // The mount itself runs the repair, so by the time the route is called there is
-    // nothing left to do — which is the idempotence this feature has to have.
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // nothing left to do — which is the idempotence this feature has to have. The effect
+    // is async, so wait for it with a bound instead of one timer tick, which raced under
+    // load and made this suite flaky.
+    for (let tick = 0; tick < 200 && attached.length < 2; tick++) {
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    }
     section.check('the mount repair attaches what a workspace owns', attached.join(',') === 'session-fresh-a,session-fresh-b', attached.join(','))
     section.check('it leaves an already-attached Session alone', !attached.includes('session-already'), attached.join(','))
     section.check('it leaves a Session whose folder is gone alone', !attached.includes('session-elsewhere'), attached.join(','))
