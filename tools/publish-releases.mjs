@@ -26,6 +26,10 @@ const owner = flag('--owner', 'SereinHK')
 const repo = flag('--repo', JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).name)
 const dry = argv.includes('--dry')
 const only = flag('--tag')
+/** Delete the release for a tag, assets and all, instead of creating one. */
+const remove = flag('--delete')
+/** Replace an existing release's notes from `docs/releases/<tag>.md`. */
+const update = flag('--update')
 
 /** Ask the configured credential helper for a GitHub token. Prints nothing. */
 function githubToken() {
@@ -53,9 +57,63 @@ const releasesDir = join(repoRoot, 'docs', 'releases')
 const files = existsSync(releasesDir)
   ? readdirSync(releasesDir).filter((name) => name.endsWith('.md')).sort()
   : []
-if (files.length === 0) throw new Error(`no release notes in ${releasesDir}`)
 
-for (const file of files) {
+// `--delete <tag>`: take a release back down, assets and all. The git tag stays, so the
+// commit it names is still reachable; only the release entry disappears.
+//
+// Nothing here calls `process.exit()`: doing that while undici is still closing its
+// keep-alive socket trips a libuv assertion on Windows (`!(handle->flags &
+// UV_HANDLE_CLOSING), src\win\async.c`), which reports a crash after perfectly good work.
+// Setting the exit code and letting the process end on its own avoids it.
+let handled = false
+if (remove !== undefined) {
+  handled = true
+  const found = await fetch(`${api}/releases/tags/${remove}`, { headers })
+  if (found.status === 404) {
+    console.log(`${remove}: no release to delete`)
+  } else {
+    const release = await found.json()
+    if (dry) {
+      console.log(`${remove}: would delete ${release.html_url} (${String((release.assets ?? []).length)} asset(s))`)
+    } else {
+      const deleted = await fetch(`${api}/releases/${String(release.id)}`, { method: 'DELETE', headers })
+      console.log(deleted.status === 204
+        ? `${remove}: deleted (the git tag is untouched)`
+        : `${remove}: FAILED (HTTP ${String(deleted.status)})`)
+      if (deleted.status !== 204) process.exitCode = 1
+    }
+  }
+}
+
+// `--update <tag>`: replace the notes of an existing release from its file.
+if (!handled && update !== undefined) {
+  handled = true
+  const found = await fetch(`${api}/releases/tags/${update}`, { headers })
+  if (found.status !== 200) {
+    console.log(`${update}: no release to update (HTTP ${String(found.status)})`)
+    process.exitCode = 1
+  } else {
+    const release = await found.json()
+    const body = readFileSync(join(releasesDir, `${update}.md`), 'utf8')
+    if (dry) {
+      console.log(`${update}: would replace its notes (${String(body.length)} bytes)`)
+    } else {
+      const patched = await fetch(`${api}/releases/${String(release.id)}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ body })
+      })
+      console.log(patched.status === 200
+        ? `${update}: notes replaced`
+        : `${update}: FAILED (HTTP ${String(patched.status)})`)
+      if (patched.status !== 200) process.exitCode = 1
+    }
+  }
+}
+
+if (files.length === 0 && !handled) throw new Error(`no release notes in ${releasesDir}`)
+
+for (const file of handled ? [] : files) {
   const tag = file.replace(/\.md$/, '')
   if (only !== undefined && only !== tag) continue
   const body = readFileSync(join(releasesDir, file), 'utf8')
