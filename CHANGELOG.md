@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1
+
+The two actions in the trash that cannot be undone are red.
+
+- **"Empty the trash" and a row's "Delete for good"** take the theme's destructive
+  colour, filled once the confirmation is showing. `Button` has no danger variant —
+  only `primary`, `ghost`, `outline` and `toolbar` — so the red comes from the
+  published token the menu row's `danger` uses, not from a literal.
+- Pinned by three checks in the render suite, which needed the harness to stop dropping
+  `style` on its `Button` stub: a stub that discards the props under test cannot fail.
+
 ## 0.3.0
 
 Stored Sessions that fell under "ungrouped" are put back where they belong.

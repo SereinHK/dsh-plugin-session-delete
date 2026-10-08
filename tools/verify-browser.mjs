@@ -92,8 +92,10 @@ const React = { createElement, Fragment, useState, useMemo, useEffect, useRef: (
 
 // ── stubbed ui-primitives ──────────────────────────────────────────────────────
 const primitives = {
-  MenuItemButton: (props) => createElement('button', { 'data-role': 'menu-item', onClick: props.onSelect }, [props.icon, props.children]),
-  Button: (props) => createElement('button', { 'data-role': 'button', disabled: props.disabled, onClick: props.onClick }, [props.icon, props.children]),
+  MenuItemButton: (props) => createElement('button', { 'data-role': 'menu-item', 'data-danger': props.danger === true ? 'yes' : undefined, onClick: props.onSelect }, [props.icon, props.children]),
+  // `style` and `variant` are forwarded: the real primitive spreads native button
+  // attributes, and the destructive buttons are told apart by exactly those.
+  Button: (props) => createElement('button', { 'data-role': 'button', 'data-variant': props.variant, style: props.style, disabled: props.disabled, onClick: props.onClick }, [props.icon, props.children]),
   Modal: (props) => props.open === false ? null : createElement('div', { 'data-role': 'modal', title: props.title }, [
     createElement('h2', { key: 'title' }, props.title),
     createElement('p', { key: 'description' }, props.description),
@@ -580,9 +582,16 @@ console.log('the trash')
   await flush()
   const asking = inspect(renderRoot(trashDialog.Component, { t })).text.join(' ')
   check('purging asks before it destroys', asking.includes('无法恢复'), asking)
-  const committed = handlerFor(renderRoot(trashDialog.Component, { t }), /确定删除这一个/)
-  check('and the question carries the action', committed !== undefined, asking)
-  await committed.handler()
+  const confirmed = handlerFor(renderRoot(trashDialog.Component, { t }), /确定删除这一个/)
+  check('and the question carries the action', confirmed !== undefined, asking)
+  // Red at both steps, from the theme's own token rather than a literal: `Button` has
+  // no danger variant, so this is the only way to say "irreversible" in its language.
+  const red = 'var(--dsw-alias-state-error-primary)'
+  check('the destructive row action is red', inspect(renderRoot(trashDialog.Component, { t })).handlers.some((entry) => entry.props?.style?.color === red), JSON.stringify(inspect(renderRoot(trashDialog.Component, { t })).handlers.map((entry) => entry.props?.style)))
+  check('and its confirmation is filled red', confirmed?.props?.style?.backgroundColor === red, JSON.stringify(confirmed?.props?.style))
+  const purgeAll = handlerFor(renderRoot(trashDialog.Component, { t }), /^清空回收站$/)
+  check('emptying the trash is red too', purgeAll?.props?.style?.color === red, JSON.stringify(purgeAll?.props?.style))
+  await confirmed.handler()
   await flush()
   check('the purge reaches the Host', trashActions.some((entry) => entry.action === 'purge'), JSON.stringify(trashActions))
 }

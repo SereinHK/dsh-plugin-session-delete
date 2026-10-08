@@ -208,7 +208,7 @@ The repository root **is** the package, so that a git install resolves its manif
 node tools/build.mjs            # src/ -> lib/  (also: node tools/build.mjs --check)
 node --test "tests/*.test.ts"   # 31 tests: host routes, the trash, adoption, cleanup plan, dictionaries
 node tools/verify-artifact.mjs  # 95 host-route checks against the built bytes
-node tools/verify-browser.mjs   # 64 render/interaction checks, refusals included
+node tools/verify-browser.mjs   # 67 render/interaction checks, refusals included
 node tools/verify-bundle.mjs    # is the package installable, and installed coherently?
 node tools/verify-runtime-contract.mjs   # do this plugin's assumptions about the
                                     # installed runtime still hold? (run after a DSH upgrade)

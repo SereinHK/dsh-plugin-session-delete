@@ -145,7 +145,7 @@ dsh plugin --profile <profile> add https://github.com/SereinHK/dsh-plugin-sessio
 `tools/build.mjs` 从这些源码生成（用 Node 自带的类型剥离），并把 `src/client/*` 模块图
 拼成 Host 原样提供的 `window.__ModuleLoader__.load({ id, factory })` 脚本。
 两份产物随后由 `tools/verify-artifact.mjs`（对构建产物跑 87 项路由断言）、`tools/verify-browser.mjs`
-（64 项渲染与交互断言，含拒绝路径）和
+（67 项渲染与交互断言，含拒绝路径）和
 `tools/verify-boot.mjs`（读取运行中应用的浏览器插件图）验证。
 
 ```sh
