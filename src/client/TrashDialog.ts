@@ -49,20 +49,15 @@ const TRASH_INITIAL_RUN: TrashRunState = {
 }
 
 /**
- * The colour of the two actions here that cannot be undone.
+ * The colour of the actions here that cannot be undone.
  *
- * `Button` has no danger variant — only `primary`, `ghost`, `outline` and `toolbar` —
- * but the theme's destructive colour is a published token (it is what the menu row's
- * `danger` uses), so the red comes from the same place the rest of the UI takes it
- * rather than from a literal.
+ * `Button` has no danger variant — only `primary`, `ghost`, `outline` and `toolbar` — but
+ * the theme's destructive colour is a published token (it is what the menu row's `danger`
+ * uses), so the red comes from the same place the rest of the UI takes it rather than from
+ * a literal. It stays red text on the outline, before and during the confirmation: what
+ * changes at that step is the label and the warning above it, not a slab of colour.
  */
 const DESTRUCTIVE_TEXT = { color: 'var(--dsw-alias-state-error-primary)' }
-/** The same red as a fill, for the step that actually destroys something. */
-const DESTRUCTIVE_FILL = {
-  backgroundColor: 'var(--dsw-alias-state-error-primary)',
-  borderColor: 'var(--dsw-alias-state-error-primary)',
-  color: 'var(--dsw-alias-label-primary)'
-}
 
 /**
  * Render the pending trash, if any.
@@ -163,8 +158,8 @@ function TrashForm(props: TrashDialogProps & { readonly request: TrashRequest })
     children: props.t('close')
   }), entries.length > 0 && run.askingAll
     ? React.createElement(primitives.Button, {
-      variant: 'primary',
-      style: DESTRUCTIVE_FILL,
+      variant: 'outline',
+      style: DESTRUCTIVE_TEXT,
       disabled: working,
       onClick: () => { act({ all: true, label: props.t('trash.purgeAll') }) },
       children: props.t('trash.confirmAllButton')
@@ -278,9 +273,9 @@ function TrashRow(props: {
       React.createElement(primitives.Button, {
         key: 'purge',
         variant: 'outline',
-        // Red at both steps, filled once it is actually destroying: this is the one
-        // action in the package with no way back.
-        style: props.asking ? DESTRUCTIVE_FILL : DESTRUCTIVE_TEXT,
+        // Red at both steps, and always the same red text on the outline: this button
+        // only changes its label when it becomes the confirmation.
+        style: DESTRUCTIVE_TEXT,
         size: 'sm',
         disabled: props.disabled,
         onClick: props.asking ? props.onPurge : props.onAsk,

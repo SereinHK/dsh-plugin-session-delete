@@ -598,7 +598,11 @@ console.log('the trash')
   })(renderRoot(trashDialog.Component, { t }))
   check('and carries the danger colour', warningRed === true, asking)
   check('the destructive row action is red', rendered.handlers.some((entry) => entry.props?.style?.color === red), JSON.stringify(rendered.handlers.map((entry) => entry.props?.style)))
-  check('and its confirmation is filled red', confirmed?.props?.style?.backgroundColor === red, JSON.stringify(confirmed?.props?.style))
+  // The confirmation keeps the outline look — red text on the theme's border, no fill —
+  // so what marks the step is the label and the warning line, not a slab of colour.
+  check('and the confirmation stays red on the outline, not filled',
+    confirmed?.props?.style?.color === red && confirmed?.props?.style?.backgroundColor === undefined,
+    JSON.stringify(confirmed?.props?.style))
   const purgeAll = handlerFor(renderRoot(trashDialog.Component, { t }), /^清空回收站$/)
   check('emptying the trash is red too', purgeAll?.props?.style?.color === red, JSON.stringify(purgeAll?.props?.style))
   await confirmed.handler()

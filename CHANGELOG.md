@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.3
+
+The destructive buttons keep the outline look throughout.
+
+- 0.3.2 filled them red once the confirmation was showing; the outline form reads better
+  and matches the row action beside it, so the red is red **text** on the theme's border
+  the whole way through. What marks the step is the label (`彻底删除` → `确定删除`) and
+  the warning line above it, not a slab of colour.
+- The render check follows: the confirmation must be red **and** unfilled, so a future
+  change cannot quietly reintroduce the fill.
+
 ## 0.3.2
 
 The destructive confirmation reads as a warning instead of shouting from a button.
