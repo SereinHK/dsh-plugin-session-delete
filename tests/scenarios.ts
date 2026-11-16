@@ -316,6 +316,19 @@ export async function runScenarios(apply: (ctx: unknown) => void): Promise<Secti
     const unmeasurable = mount({ 'session-ffffffff-1111-2222-3333-666666666666': { cwd } })
     section.check('omits the size when nothing is on disk',
       (await call(unmeasurable, {}, SESSION_UNUSED_PATH)).payload?.value?.sessions?.[0]?.bytes === undefined)
+
+    // On Windows the backend stamps the on-disk casing into the project directory while
+    // the header keeps the path as it was typed, so `projectKey` is a prediction that can
+    // miss. A Session stored that way must still be measured — found by scanning, not by
+    // giving up and reporting no size.
+    const casedId = 'session-ffffffff-1111-2222-3333-777777777777'
+    const casedHeader = join(home, 'Downloads', 'mac')
+    const casedDirectory = await seed(casedId, { project: '--C-Users-Administrator-Downloads-Mac--' })
+    const cased = mount({ [casedId]: { cwd: casedHeader } })
+    const casedRow = (await call(cased, {}, SESSION_UNUSED_PATH)).payload?.value?.sessions?.[0]
+    const casedWritten = (await stat(join(casedDirectory, 'session.v4.jsonl.zstd'))).size
+    section.check('measures a Session whose project directory only differs in casing',
+      casedRow?.bytes === casedWritten, `${String(casedRow?.bytes)} vs ${String(casedWritten)}`)
     results.push(section.result())
   }
 

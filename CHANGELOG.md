@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.5
+
+The predicted project directory stops being an authority, so a DSH that canonicalises
+path casing cannot make a Session look unmeasurable.
+
+- DSH 0.2.2-rc.3 derives a Session's project directory from the path it **resolved**, and on
+  Windows that carries the on-disk casing — so a header saying `…\Downloads\mac` can sit in
+  `--…-Downloads-Mac--`. The plugin's `projectKey` is a pure function over the header and
+  cannot reproduce that, which the runtime-contract check caught on this machine (1 of 17
+  Sessions).
+- Every read now treats the prediction as a fast path with a scan behind it, including the
+  size measurement — which had no fallback and therefore reported no size for such a Session.
+  Deletion and restore already behaved this way, so the feature surface is unchanged; what
+  changed is that a predicted path can no longer be the only path.
+- `verify-runtime-contract.mjs` now separates the assumptions the plugin **depends** on from
+  the one it merely **predicts**: the run reports `7/7 assumptions still hold` plus a named
+  prediction-drift line, instead of calling the whole plugin untrustworthy over a path it
+  already knew how to find another way.
+- Suites: 31 package tests, 100 host-route checks against the built bytes (including a Session
+  whose project directory differs only in casing), 69 render and interaction checks.
+
 ## 0.3.4
 
 A conversation can be deleted after switching away from it; no restart needed.

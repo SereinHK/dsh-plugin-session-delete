@@ -33,6 +33,8 @@ const cacheRoot = join(home, 'storages', 'session_projcache', 'sessions')
 
 let checks = 0
 const failures = []
+/** Drifted predictions the plugin does not depend on: reported, never fatal. */
+const advisories = []
 /** Record one expectation. */
 function check(label, condition, detail = '') {
   checks++
@@ -40,6 +42,23 @@ function check(label, condition, detail = '') {
   else {
     failures.push(label)
     console.log(`  FAIL ${label}${detail === '' ? '' : ` — ${detail}`}`)
+  }
+}
+/**
+ * Record an expectation the plugin may *predict* but never *rely* on.
+ *
+ * The directory naming is the case in point: the backend derives the project directory
+ * from the path it resolved (on Windows that carries the on-disk casing), while the
+ * plugin's `projectKey` is a pure function over the header's `cwd`. Those can disagree on
+ * Windows without anything being broken, because every read the plugin does falls back to
+ * scanning the root. Drift here is worth knowing, not worth blocking on.
+ */
+function advisory(label, condition, detail = '') {
+  checks++
+  if (condition) console.log(`  ok   ${label}`)
+  else {
+    advisories.push(label)
+    console.log(`  note ${label}${detail === '' ? '' : ` — ${detail}`}`)
   }
 }
 
@@ -95,8 +114,8 @@ console.log('session layout')
     }
     check('session directory names are fixed points of encodeSegment', idMismatch.length === 0,
       `${String(idMismatch.length)}/${String(idsChecked)} differ, e.g. ${idMismatch[0] ?? ''}`)
-    check('projectKey reproduces the backend\'s project directory', mismatched.length === 0,
-      `${String(mismatched.length)}/${String(compared)} differ, e.g. ${mismatched[0] ?? ''}`)
+    advisory('projectKey reproduces the backend\'s project directory', mismatched.length === 0,
+      `${String(mismatched.length)}/${String(compared)} differ, e.g. ${mismatched[0] ?? ''} — every read falls back to scanning the root`)
     console.log(`  ..   compared ${String(compared)} headers over ${String(idsChecked)} sessions`)
   }
 }
@@ -167,7 +186,14 @@ if (url !== undefined && url !== '') {
 }
 
 console.log('')
-console.log(`${String(checks - failures.length)}/${String(checks)} assumptions still hold`)
+const hardChecks = checks - advisories.length
+console.log(`${String(hardChecks - failures.length)}/${String(hardChecks)} assumptions still hold`)
+if (advisories.length > 0) {
+  console.log('')
+  console.log(`${String(advisories.length)} prediction(s) drifted, which the plugin absorbs by scanning:`)
+  for (const label of advisories) console.log(`  - ${label}`)
+  console.log('The features still work; only a predicted path was wrong.')
+}
 if (failures.length > 0) {
   console.log('')
   console.log('The runtime moved. The plugin reads these artifacts directly, so it needs')
